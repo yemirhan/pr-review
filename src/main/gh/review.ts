@@ -1,11 +1,13 @@
 import { gh } from './client';
-import type { ReviewDraft, DraftInlineComment } from '@shared/types';
+import type { ReviewDraft, DraftInlineComment, DraftFileComment } from '@shared/types';
 
 /**
  * Submit a review with optional inline comments via REST API.
  *
- * gh api uses --raw-field for string values and accepts JSON stdin via --input -.
- * For arrays of objects (comments), we POST a full JSON body on stdin.
+ * Two-phase submission:
+ *   1. POST the review (with line-level inline comments) — atomic.
+ *   2. POST each file-level comment as a standalone PR review comment
+ *      (the review endpoint doesn't accept subject_type=file).
  */
 export async function submitReview(
   owner: string,
@@ -13,6 +15,7 @@ export async function submitReview(
   num: number,
   draft: ReviewDraft
 ): Promise<void> {
+  // Phase 1: the review itself.
   const payload = {
     event: draft.event,
     body: draft.body ?? '',
@@ -31,6 +34,45 @@ export async function submitReview(
       'Accept: application/vnd.github+json'
     ],
     { input: JSON.stringify(payload) }
+  );
+
+  // Phase 2: file-level comments, one per request. Posting them after the review
+  // means an early failure in phase 1 cancels the whole submission.
+  const fileComments = draft.fileComments ?? [];
+  if (fileComments.length === 0) return;
+  if (!draft.headOid) {
+    throw new Error('submitReview: headOid is required when fileComments are present');
+  }
+  for (const fc of fileComments) {
+    await postFileComment(owner, name, num, draft.headOid, fc);
+  }
+}
+
+async function postFileComment(
+  owner: string,
+  name: string,
+  num: number,
+  commitId: string,
+  c: DraftFileComment
+): Promise<void> {
+  const body = {
+    body: c.body,
+    path: c.path,
+    commit_id: commitId,
+    subject_type: 'file'
+  };
+  await gh(
+    [
+      'api',
+      '--method',
+      'POST',
+      `repos/${owner}/${name}/pulls/${num}/comments`,
+      '--input',
+      '-',
+      '-H',
+      'Accept: application/vnd.github+json'
+    ],
+    { input: JSON.stringify(body) }
   );
 }
 

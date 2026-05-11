@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
 import { api, qk, unwrap, ApiError } from '../lib/api';
 import { highlightLines } from '../lib/highlight';
+import { useUI } from '../store/ui';
 import type { ConflictFile, Editor, Repo } from '@shared/types';
 
 export function ConflictsView({
@@ -106,12 +107,15 @@ function ConflictFilePanel({
   const [collapsed, setCollapsed] = useState(false);
 
   const lang = useMemo(() => detectLang(file.path), [file.path]);
+  const themePref = useUI((s) => s.theme);
+  const shikiTheme = themePref === 'light' ? 'github-light' : 'github-dark';
+
   const [tokens, setTokens] = useState<string[] | null>(null);
   useEffect(() => {
     let cancelled = false;
     setTokens(null);
     if (lang === 'text' || !file.content) return;
-    highlightLines(lang, file.content)
+    highlightLines(lang, file.content, shikiTheme)
       .then((t) => {
         if (!cancelled) setTokens(t);
       })
@@ -119,7 +123,7 @@ function ConflictFilePanel({
     return () => {
       cancelled = true;
     };
-  }, [lang, file.content]);
+  }, [lang, file.content, shikiTheme]);
 
   const rawLines = useMemo(() => file.content.split('\n'), [file.content]);
 

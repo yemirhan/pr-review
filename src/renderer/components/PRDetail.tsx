@@ -93,7 +93,9 @@ export function PRDetail({ repo, prNumber }: { repo: Repo | null; prNumber: numb
                 {pr.headRefName} → {pr.baseRefName}
               </span>
             </div>
-            <h1 className="text-lg font-semibold leading-snug truncate">{pr.title}</h1>
+            <h1 className="text-[17px] font-semibold leading-snug tracking-[-0.01em] truncate text-fg">
+              {pr.title}
+            </h1>
             <div className="flex items-center gap-2 mt-2">
               {pr.isDraft && <span className="chip">Draft</span>}
               <ChecksPill checks={pr.checks} />
@@ -160,6 +162,9 @@ export function PRDetail({ repo, prNumber }: { repo: Repo | null; prNumber: numb
             error={filesQ.error as ApiError | null}
             files={filesQ.data ?? []}
             threads={commentsQ.data ?? []}
+            repoId={repo.id}
+            prNumber={pr.number}
+            headOid={pr.headRefOid}
           />
         )}
         {tab === 'conversation' && <Conversation pr={pr} comments={commentsQ.data ?? []} />}
@@ -169,7 +174,14 @@ export function PRDetail({ repo, prNumber }: { repo: Repo | null; prNumber: numb
         )}
       </div>
 
-      {tab === 'files' && <ReviewBar repo={repo} prNumber={prNumber} onSubmitted={invalidatePR} />}
+      {tab === 'files' && (
+        <ReviewBar
+          repo={repo}
+          prNumber={prNumber}
+          headOid={pr.headRefOid}
+          onSubmitted={invalidatePR}
+        />
+      )}
 
       {mergeOpen && (
         <MergeModal

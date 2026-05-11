@@ -1,58 +1,71 @@
 import type { Config } from 'tailwindcss';
 
+/**
+ * Color tokens are exposed as `rgb(var(--c-name) / <alpha-value>)` so
+ * Tailwind's opacity modifiers (`/30`, `/40`, etc.) keep working and so
+ * the same class names produce different colors depending on the theme
+ * variables defined in theme.css.
+ */
+const v = (name: string) => `rgb(var(--c-${name}) / <alpha-value>)`;
+/** Fixed-alpha helper for the `*-subtle` tokens. Tailwind only substitutes
+ *  `<alpha-value>` when we use it; here we want a constant 0.15 tint, so we
+ *  emit a literal rgb() expression that references the base CSS variable.
+ */
+const tint = (name: string, alpha: number) => `rgb(var(--c-${name}) / ${alpha})`;
+
 const config: Config = {
   content: ['./src/renderer/**/*.{html,ts,tsx}'],
   theme: {
     extend: {
       colors: {
-        // GitHub dark palette (Primer)
         canvas: {
-          DEFAULT: '#0d1117',
-          inset: '#010409',
-          subtle: '#161b22',
-          overlay: '#1c2128'
+          DEFAULT: v('canvas'),
+          inset: v('canvas-inset'),
+          subtle: v('canvas-subtle'),
+          overlay: v('canvas-overlay')
         },
         border: {
-          DEFAULT: '#30363d',
-          muted: '#21262d',
-          subtle: '#1b1f23'
+          DEFAULT: v('border'),
+          muted: v('border-muted'),
+          subtle: v('border-subtle')
         },
         fg: {
-          DEFAULT: '#e6edf3',
-          muted: '#8b949e',
-          subtle: '#6e7681',
-          onAccent: '#ffffff'
+          DEFAULT: v('fg'),
+          muted: v('fg-muted'),
+          subtle: v('fg-subtle'),
+          onAccent: v('fg-onAccent')
         },
         accent: {
-          DEFAULT: '#2f81f7',
-          emphasis: '#1f6feb',
-          subtle: 'rgba(56,139,253,0.15)'
+          DEFAULT: v('accent'),
+          emphasis: v('accent-emphasis'),
+          subtle: tint('accent-subtle', 0.15)
         },
         success: {
-          DEFAULT: '#3fb950',
-          emphasis: '#238636',
-          subtle: 'rgba(46,160,67,0.15)'
+          DEFAULT: v('success'),
+          emphasis: v('success-emphasis'),
+          subtle: tint('success-subtle', 0.15)
         },
         danger: {
-          DEFAULT: '#f85149',
-          emphasis: '#da3633',
-          subtle: 'rgba(248,81,73,0.15)'
+          DEFAULT: v('danger'),
+          emphasis: v('danger-emphasis'),
+          subtle: tint('danger-subtle', 0.15)
         },
         attention: {
-          DEFAULT: '#d29922',
-          emphasis: '#9e6a03',
-          subtle: 'rgba(187,128,9,0.15)'
+          DEFAULT: v('attention'),
+          emphasis: v('attention-emphasis'),
+          subtle: tint('attention-subtle', 0.15)
         },
         diff: {
-          addBg: 'rgba(46,160,67,0.15)',
-          addLine: 'rgba(46,160,67,0.30)',
-          delBg: 'rgba(248,81,73,0.10)',
-          delLine: 'rgba(248,81,73,0.25)',
-          gutter: '#0d1117'
+          addBg: tint('diff-addBg', 0.15),
+          addLine: tint('diff-addLine', 0.3),
+          delBg: tint('diff-delBg', 0.1),
+          delLine: tint('diff-delLine', 0.25),
+          gutter: v('diff-gutter')
         }
       },
       fontFamily: {
         sans: [
+          '"Public Sans Variable"',
           '-apple-system',
           'BlinkMacSystemFont',
           '"Segoe UI"',
@@ -61,6 +74,7 @@ const config: Config = {
           'sans-serif'
         ],
         mono: [
+          '"JetBrains Mono Variable"',
           '"SF Mono"',
           'ui-monospace',
           'SFMono-Regular',
@@ -75,6 +89,9 @@ const config: Config = {
         xs: '12px',
         sm: '13px',
         base: '14px'
+      },
+      transitionTimingFunction: {
+        smooth: 'cubic-bezier(0.2, 0, 0, 1)'
       },
       keyframes: {
         'fade-in': { '0%': { opacity: '0' }, '100%': { opacity: '1' } },

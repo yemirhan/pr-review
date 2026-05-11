@@ -6,10 +6,12 @@ import type { Repo, ReviewEvent } from '@shared/types';
 export function ReviewBar({
   repo,
   prNumber,
+  headOid,
   onSubmitted
 }: {
   repo: Repo;
   prNumber: number;
+  headOid: string;
   onSubmitted: () => void;
 }) {
   const draft = useUI((s) => s.getDraft());
@@ -27,18 +29,21 @@ export function ReviewBar({
   //   COMMENT          - must have at least a body or an inline comment
   const bodyFilled = draft.body.trim().length > 0;
   const hasInline = draft.comments.length > 0;
+  const hasFile = draft.fileComments.length > 0;
   const canSubmit =
     draft.event === 'APPROVE'
       ? true
       : draft.event === 'REQUEST_CHANGES'
         ? bodyFilled
-        : bodyFilled || hasInline;
+        : bodyFilled || hasInline || hasFile;
 
   async function submit() {
     setSubmitting(true);
     setErr(null);
     try {
-      await unwrap(api.review.submit(repo.id, prNumber, draft));
+      await unwrap(
+        api.review.submit(repo.id, prNumber, { ...draft, headOid })
+      );
       clearDraft();
       setOpen(false);
       onSubmitted();
@@ -64,7 +69,14 @@ export function ReviewBar({
       )}
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-2xs text-fg-muted">
-          <span className="chip">{draft.comments.length} inline draft{draft.comments.length === 1 ? '' : 's'}</span>
+          <span className="chip">
+            {draft.comments.length} inline{draft.comments.length === 1 ? ' draft' : ' drafts'}
+          </span>
+          {hasFile && (
+            <span className="chip">
+              {draft.fileComments.length} file{draft.fileComments.length === 1 ? '' : 's'}
+            </span>
+          )}
           {draft.body.trim().length > 0 && <span className="chip">Body added</span>}
           {!open && (
             <button onClick={() => setOpen(true)} className="btn-ghost">

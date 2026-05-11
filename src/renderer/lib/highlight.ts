@@ -4,6 +4,8 @@
  * cached so re-renders don't re-hit the worker.
  */
 
+import type { ShikiTheme } from '../workers/shiki.worker';
+
 let worker: Worker | null = null;
 let nextId = 1;
 
@@ -33,14 +35,16 @@ function ensureWorker(): Worker {
   return worker;
 }
 
-function key(lang: string, code: string): string {
-  // Hash by length + a few chars; collisions are fine for cache invalidation purposes
-  // because we also include the code as the key (small lines).
-  return `${lang}::${code.length}::${code}`;
+function key(theme: ShikiTheme, lang: string, code: string): string {
+  return `${theme}::${lang}::${code.length}::${code}`;
 }
 
-export function highlightLines(lang: string, code: string): Promise<string[]> {
-  const k = key(lang, code);
+export function highlightLines(
+  lang: string,
+  code: string,
+  theme: ShikiTheme
+): Promise<string[]> {
+  const k = key(theme, lang, code);
   const hit = cache.get(k);
   if (hit) return Promise.resolve(hit);
 
@@ -54,6 +58,8 @@ export function highlightLines(lang: string, code: string): Promise<string[]> {
       },
       reject
     });
-    w.postMessage({ id, lang, code });
+    w.postMessage({ id, lang, code, theme });
   });
 }
+
+export type { ShikiTheme };

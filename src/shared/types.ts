@@ -142,12 +142,21 @@ export interface DraftInlineComment {
   body: string;
 }
 
+export interface DraftFileComment {
+  uid: string;
+  path: string;
+  body: string;
+}
+
 export type ReviewEvent = 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT';
 
 export interface ReviewDraft {
   event: ReviewEvent;
   body: string;
   comments: DraftInlineComment[];
+  fileComments?: DraftFileComment[];
+  /** Required when fileComments has any entries — file-level comments anchor to a commit SHA. */
+  headOid?: string;
 }
 
 export type MergeStrategy = 'merge' | 'squash' | 'rebase';

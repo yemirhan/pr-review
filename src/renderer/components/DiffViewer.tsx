@@ -1,7 +1,12 @@
 import { useMemo, useState, useRef, useEffect, memo } from 'react';
-import type { FileDiff, DiffHunk, InlineCommentThread, DraftInlineComment } from '@shared/types';
+import type {
+  FileDiff,
+  DiffHunk,
+  InlineCommentThread,
+  DraftInlineComment
+} from '@shared/types';
 import { highlightLines } from '../lib/highlight';
-import { useUI } from '../store/ui';
+import { useUI, viewedKey } from '../store/ui';
 import type { ApiError } from '../lib/api';
 
 const LARGE_FILE_LINES = 1500;
@@ -11,9 +16,12 @@ interface Props {
   error: ApiError | null;
   files: FileDiff[];
   threads: InlineCommentThread[];
+  repoId: string;
+  prNumber: number;
+  headOid: string;
 }
 
-export function DiffViewer({ loading, error, files, threads }: Props) {
+export function DiffViewer({ loading, error, files, threads, repoId, prNumber, headOid }: Props) {
   if (loading) return <div className="p-6 text-fg-muted">Loading diff…</div>;
   if (error)
     return (
@@ -33,6 +41,9 @@ export function DiffViewer({ loading, error, files, threads }: Props) {
             key={f.path}
             file={f}
             threads={threads.filter((t) => t.path === f.path)}
+            repoId={repoId}
+            prNumber={prNumber}
+            headOid={headOid}
           />
         ))}
       </div>
@@ -42,37 +53,144 @@ export function DiffViewer({ loading, error, files, threads }: Props) {
 
 const FilePanel = memo(function FilePanel({
   file,
-  threads
+  threads,
+  repoId,
+  prNumber,
+  headOid
 }: {
   file: FileDiff;
   threads: InlineCommentThread[];
+  repoId: string;
+  prNumber: number;
+  headOid: string;
 }) {
   const totalLines = file.hunks.reduce((acc, h) => acc + h.lines.length, 0);
-  const [collapsed, setCollapsed] = useState(file.binary || totalLines > LARGE_FILE_LINES);
+
+  const vKey = viewedKey(repoId, prNumber, headOid, file.path);
+  const viewed = useUI((s) => !!s.viewed[vKey]);
+  const setViewed = useUI((s) => s.setViewed);
+
+  const [collapsed, setCollapsed] = useState(
+    file.binary || totalLines > LARGE_FILE_LINES || viewed
+  );
+  const [fileComposerOpen, setFileComposerOpen] = useState(false);
+  const [fileComposerBody, setFileComposerBody] = useState('');
+
+  const draft = useUI((s) => s.getDraft());
+  const addFileComment = useUI((s) => s.addFileComment);
+  const removeFileComment = useUI((s) => s.removeFileComment);
+
+  const fileDrafts = useMemo(
+    () => draft.fileComments.filter((c) => c.path === file.path),
+    [draft.fileComments, file.path]
+  );
+
+  function onToggleViewed(e: React.ChangeEvent<HTMLInputElement>) {
+    e.stopPropagation();
+    const next = e.target.checked;
+    setViewed(vKey, next);
+    if (next) setCollapsed(true);
+  }
+
+  function saveFileComment() {
+    const body = fileComposerBody.trim();
+    if (!body) return;
+    addFileComment({
+      uid: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      path: file.path,
+      body
+    });
+    setFileComposerBody('');
+    setFileComposerOpen(false);
+  }
 
   return (
-    <section className="rounded-md border border-border bg-canvas-subtle/40 overflow-hidden">
-      <header
-        className="flex items-center justify-between px-3 h-9 border-b border-border-muted bg-canvas-inset/50 cursor-pointer select-none"
-        onClick={() => setCollapsed((c) => !c)}
-      >
-        <div className="flex items-center gap-2 min-w-0">
+    <section
+      className={`rounded-md border border-border bg-canvas-subtle/40 overflow-hidden transition-opacity ${
+        viewed && collapsed ? 'opacity-70' : ''
+      }`}
+    >
+      <header className="flex items-center justify-between px-3 h-10 border-b border-border-muted bg-canvas-inset/50 select-none gap-3">
+        <button
+          onClick={() => setCollapsed((c) => !c)}
+          className="flex items-center gap-2 min-w-0 flex-1 text-left"
+        >
           <span className="text-fg-subtle text-xs">{collapsed ? '▸' : '▾'}</span>
-          <code className="text-sm text-fg truncate">{file.path}</code>
+          <code className={`text-sm truncate ${viewed ? 'text-fg-muted line-through' : 'text-fg'}`}>
+            {file.path}
+          </code>
           {file.oldPath && file.oldPath !== file.path && (
             <span className="text-2xs text-fg-subtle truncate">
               (was <code>{file.oldPath}</code>)
             </span>
           )}
           <StatusChip status={file.status} />
-        </div>
-        <div className="text-2xs shrink-0">
-          <span className="text-success">+{file.additions}</span>{' '}
-          <span className="text-danger">−{file.deletions}</span>
+        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="text-2xs font-medium">
+            <span className="text-success">+{file.additions}</span>{' '}
+            <span className="text-danger">−{file.deletions}</span>
+          </span>
+          <DiffBar additions={file.additions} deletions={file.deletions} />
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setFileComposerOpen((o) => !o);
+              if (!collapsed && !fileComposerOpen) {
+                // keep open
+              } else if (collapsed) {
+                setCollapsed(false);
+              }
+            }}
+            className={`btn-icon h-7 w-7 ${fileDrafts.length > 0 ? 'text-accent' : ''}`}
+            title="Comment on this file"
+            aria-label="Comment on this file"
+          >
+            <CommentIcon filled={fileDrafts.length > 0} />
+          </button>
+          <label
+            className={`inline-flex items-center gap-1.5 h-7 px-2 rounded-lg border text-2xs font-medium cursor-pointer transition-colors duration-100 ${
+              viewed
+                ? 'bg-success-subtle border-success/40 text-success'
+                : 'bg-canvas border-border text-fg-muted hover:text-fg'
+            }`}
+            onClick={(e) => e.stopPropagation()}
+            title="Mark this file as viewed"
+          >
+            <input
+              type="checkbox"
+              checked={viewed}
+              onChange={onToggleViewed}
+              className="accent-success h-3 w-3"
+            />
+            Viewed
+          </label>
         </div>
       </header>
       {!collapsed && (
         <div>
+          {(fileDrafts.length > 0 || fileComposerOpen) && (
+            <div className="px-3 pt-3 space-y-2 border-b border-border-muted pb-3 bg-canvas">
+              {fileDrafts.map((d) => (
+                <FileCommentBubble
+                  key={d.uid}
+                  body={d.body}
+                  onRemove={() => removeFileComment(d.uid)}
+                />
+              ))}
+              {fileComposerOpen && (
+                <FileComposer
+                  value={fileComposerBody}
+                  onChange={setFileComposerBody}
+                  onCancel={() => {
+                    setFileComposerOpen(false);
+                    setFileComposerBody('');
+                  }}
+                  onSave={saveFileComment}
+                />
+              )}
+            </div>
+          )}
           {file.binary ? (
             <div className="p-4 text-sm text-fg-muted">Binary file not shown.</div>
           ) : (
@@ -83,6 +201,107 @@ const FilePanel = memo(function FilePanel({
     </section>
   );
 });
+
+function DiffBar({ additions, deletions }: { additions: number; deletions: number }) {
+  const total = additions + deletions;
+  if (total === 0) return null;
+  const segments = 5;
+  const addShare = Math.round((additions / total) * segments);
+  return (
+    <span className="inline-flex gap-0.5" aria-hidden>
+      {Array.from({ length: segments }).map((_, i) => {
+        const cls =
+          i < addShare
+            ? 'bg-success'
+            : i < addShare + (segments - addShare)
+              ? 'bg-danger'
+              : 'bg-border-muted';
+        return <span key={i} className={`block h-2.5 w-2.5 rounded-sm ${cls}`} />;
+      })}
+    </span>
+  );
+}
+
+function CommentIcon({ filled }: { filled: boolean }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
+      <path
+        d="M2.5 3.5h11A1.5 1.5 0 0 1 15 5v6.5a1.5 1.5 0 0 1-1.5 1.5H7l-3.5 2.5v-2.5h-1A1.5 1.5 0 0 1 1 11.5V5a1.5 1.5 0 0 1 1.5-1.5Z"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinejoin="round"
+        fill={filled ? 'currentColor' : 'none'}
+        fillOpacity={filled ? 0.15 : 0}
+      />
+    </svg>
+  );
+}
+
+function FileCommentBubble({ body, onRemove }: { body: string; onRemove: () => void }) {
+  return (
+    <div className="rounded-md border border-accent/40 bg-accent-subtle/40 px-3 py-2">
+      <div className="flex items-center justify-between mb-1 text-2xs">
+        <span className="text-accent font-medium">File-level draft</span>
+        <button onClick={onRemove} className="text-fg-subtle hover:text-danger text-2xs">
+          remove
+        </button>
+      </div>
+      <div className="whitespace-pre-wrap text-fg text-xs">{body}</div>
+    </div>
+  );
+}
+
+function FileComposer({
+  value,
+  onChange,
+  onCancel,
+  onSave
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  onCancel: () => void;
+  onSave: () => void;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    ref.current?.focus();
+  }, []);
+  return (
+    <div className="rounded-md border border-accent/40 bg-canvas-overlay px-3 py-2 animate-slide-up">
+      <div className="text-2xs text-accent mb-1 font-medium">Comment on this file</div>
+      <textarea
+        ref={ref}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        rows={3}
+        placeholder="Add a file-level comment…"
+        className="w-full bg-canvas-inset border border-border-muted rounded-md p-2 text-xs text-fg outline-none focus:border-accent resize-y"
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+            e.preventDefault();
+            if (value.trim()) onSave();
+          }
+          if (e.key === 'Escape') onCancel();
+        }}
+      />
+      <div className="flex items-center justify-between mt-2">
+        <span className="text-2xs text-fg-subtle">⌘+Enter to add · Esc to cancel</span>
+        <div className="flex gap-1">
+          <button className="btn-ghost" onClick={onCancel}>
+            Cancel
+          </button>
+          <button
+            className="btn-primary disabled:opacity-50"
+            disabled={!value.trim()}
+            onClick={onSave}
+          >
+            Add to review
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function StatusChip({ status }: { status: FileDiff['status'] }) {
   const map: Record<FileDiff['status'], string> = {
@@ -138,12 +357,15 @@ function DiffBody({ file, threads }: { file: FileDiff; threads: InlineCommentThr
     return all.join('\n');
   }, [file.hunks]);
 
+  const themePref = useUI((s) => s.theme);
+  const shikiTheme = themePref === 'light' ? 'github-light' : 'github-dark';
+
   const [tokens, setTokens] = useState<string[] | null>(null);
   useEffect(() => {
     let cancelled = false;
     setTokens(null);
     if (file.language === 'text' || codeForHighlight.length === 0) return;
-    highlightLines(file.language, codeForHighlight)
+    highlightLines(file.language, codeForHighlight, shikiTheme)
       .then((t) => {
         if (!cancelled) setTokens(t);
       })
@@ -151,7 +373,7 @@ function DiffBody({ file, threads }: { file: FileDiff; threads: InlineCommentThr
     return () => {
       cancelled = true;
     };
-  }, [file.language, codeForHighlight]);
+  }, [file.language, codeForHighlight, shikiTheme]);
 
   // Map (hunk, line) → global line index for token lookup.
   const lineGlobalIndex = useMemo(() => {
