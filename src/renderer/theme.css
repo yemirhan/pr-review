@@ -1,0 +1,78 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+    background: theme('colors.canvas.DEFAULT');
+    color: theme('colors.fg.DEFAULT');
+    font-family: theme('fontFamily.sans');
+    font-size: theme('fontSize.base');
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  *::selection {
+    background: theme('colors.accent.subtle');
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: theme('colors.border.DEFAULT');
+    border-radius: 6px;
+    border: 2px solid theme('colors.canvas.DEFAULT');
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: theme('colors.fg.subtle');
+  }
+
+  button {
+    cursor: default;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 px-3 h-7 rounded-md text-sm font-medium border transition-colors;
+    @apply bg-canvas-subtle border-border text-fg hover:bg-canvas-overlay;
+  }
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-1.5 px-3 h-7 rounded-md text-sm font-medium border transition-colors;
+    @apply bg-success-emphasis border-success-emphasis text-fg-onAccent hover:brightness-110;
+  }
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-1.5 px-3 h-7 rounded-md text-sm font-medium border transition-colors;
+    @apply bg-danger-emphasis border-danger-emphasis text-fg-onAccent hover:brightness-110;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-1.5 px-2 h-7 rounded-md text-sm font-medium transition-colors text-fg-muted hover:text-fg hover:bg-canvas-subtle;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1 px-2 h-5 rounded-full text-2xs border border-border bg-canvas-subtle text-fg-muted;
+  }
+  .input {
+    @apply h-7 px-2 rounded-md bg-canvas-inset border border-border text-sm text-fg placeholder:text-fg-subtle outline-none focus:border-accent;
+  }
+  .ring-focus {
+    @apply outline-none focus-visible:ring-2 focus-visible:ring-accent ring-offset-0;
+  }
+}
+
+/* Drag region for the custom titlebar */
+.drag {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}

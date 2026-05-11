@@ -1,0 +1,32 @@
+import type { GhError } from '@shared/types';
+
+export class ApiError extends Error {
+  code: GhError['code'];
+  stderr?: string;
+  constructor(err: GhError) {
+    super(err.message);
+    this.code = err.code;
+    this.stderr = err.stderr;
+  }
+}
+
+/** Unwrap a Result envelope from the preload bridge into a plain promise. */
+export async function unwrap<T>(
+  p: Promise<{ ok: true; data: T } | { ok: false; error: GhError }>
+): Promise<T> {
+  const r = await p;
+  if (r.ok) return r.data;
+  throw new ApiError(r.error);
+}
+
+export const api = window.api;
+
+export const qk = {
+  repos: ['repos'] as const,
+  prs: (repoId: string) => ['prs', repoId] as const,
+  prDetail: (repoId: string, num: number) => ['pr', repoId, num] as const,
+  prFiles: (repoId: string, num: number) => ['pr-files', repoId, num] as const,
+  prComments: (repoId: string, num: number) => ['pr-comments', repoId, num] as const,
+  prConflicts: (repoId: string, num: number) => ['pr-conflicts', repoId, num] as const,
+  editors: ['editors'] as const
+};
