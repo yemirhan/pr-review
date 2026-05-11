@@ -10,16 +10,19 @@ import { inspectRepo } from './repo/inspect';
 import { getConflicts } from './git/conflicts';
 import { detectEditors } from './editors/detect';
 import { openInEditor } from './editors/open';
+import { AIClientError, getAuthStatus, reviewPR } from './ai/client';
 import type {
   ReviewDraft,
   MergeStrategy,
   Repo,
   CheckoutProgress,
-  GhError
+  GhError,
+  AIReviewChunk
 } from '@shared/types';
 
 function toErrPayload(err: unknown): GhError {
   if (err instanceof GhClientError) return err.toJSON();
+  if (err instanceof AIClientError) return err.toJSON();
   if (err instanceof Error) {
     const code = (err.message === 'NOT_A_GIT_REPO'
       ? 'NOT_A_GIT_REPO'
@@ -177,6 +180,34 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       if (!repo) throw new Error('Repo not found');
       const target = relativePath ? `${repo.path}/${relativePath}` : repo.path;
       await openInEditor(editorId, target);
+    })
+  );
+
+  // AI review -------------------------------------------------------------
+  ipcMain.handle(
+    'ai:auth:status',
+    safe(async () => getAuthStatus())
+  );
+
+  ipcMain.handle(
+    'ai:review',
+    safe(async (e, repoId: string, num: number) => {
+      const repo = findRepo(repoId);
+      if (!repo) throw new Error('Repo not found');
+      const [pr, files] = await Promise.all([
+        getPR(repo.owner, repo.name, num),
+        getFiles(repo.owner, repo.name, num)
+      ]);
+      const win = BrowserWindow.fromWebContents(e.sender);
+      const result = await reviewPR({
+        pr,
+        files,
+        onChunk: (text) => {
+          const chunk: AIReviewChunk = { prNumber: num, text };
+          win?.webContents.send('ai:review:chunk', chunk);
+        }
+      });
+      return result;
     })
   );
 

@@ -10,7 +10,10 @@ import type {
   CheckoutProgress,
   GhError,
   ConflictInfo,
-  Editor
+  Editor,
+  AIAuthStatus,
+  AIReviewChunk,
+  AIReviewResult
 } from '@shared/types';
 
 export type Result<T> = { ok: true; data: T } | { ok: false; error: GhError };
@@ -54,7 +57,19 @@ const api = {
       return () => {
         ipcRenderer.removeListener('checkout:progress', handler);
       };
+    },
+    onAIReviewChunk(cb: (chunk: AIReviewChunk) => void): () => void {
+      const handler = (_e: unknown, chunk: AIReviewChunk) => cb(chunk);
+      ipcRenderer.on('ai:review:chunk', handler);
+      return () => {
+        ipcRenderer.removeListener('ai:review:chunk', handler);
+      };
     }
+  },
+  ai: {
+    authStatus: () => call<AIAuthStatus>('ai:auth:status'),
+    review: (repoId: string, num: number) =>
+      call<AIReviewResult>('ai:review', repoId, num)
   },
   shell: {
     openExternal: (url: string) => call<void>('shell:openExternal', url)

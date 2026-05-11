@@ -9,6 +9,7 @@ import { MergeModal } from './MergeModal';
 import { CheckoutModal } from './CheckoutModal';
 import { ConflictsView } from './ConflictsView';
 import { EditorMenu } from './EditorMenu';
+import { AIReviewPanel } from './AIReviewPanel';
 import type { Repo } from '@shared/types';
 
 type Tab = 'files' | 'conversation' | 'commits' | 'conflicts';
@@ -157,15 +158,20 @@ export function PRDetail({ repo, prNumber }: { repo: Repo | null; prNumber: numb
       {/* Content */}
       <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
         {tab === 'files' && (
-          <DiffViewer
-            loading={filesQ.isLoading}
-            error={filesQ.error as ApiError | null}
-            files={filesQ.data ?? []}
-            threads={commentsQ.data ?? []}
-            repoId={repo.id}
-            prNumber={pr.number}
-            headOid={pr.headRefOid}
-          />
+          <div className="flex-1 min-h-0 flex">
+            <div className="flex-1 min-w-0 flex flex-col">
+              <DiffViewer
+                loading={filesQ.isLoading}
+                error={filesQ.error as ApiError | null}
+                files={filesQ.data ?? []}
+                threads={commentsQ.data ?? []}
+                repoId={repo.id}
+                prNumber={pr.number}
+                headOid={pr.headRefOid}
+              />
+            </div>
+            <AIReviewPanel repoId={repo.id} prNumber={pr.number} />
+          </div>
         )}
         {tab === 'conversation' && <Conversation pr={pr} comments={commentsQ.data ?? []} />}
         {tab === 'commits' && <Commits commits={pr.commits} />}

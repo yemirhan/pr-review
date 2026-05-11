@@ -201,7 +201,30 @@ export interface GhError {
     | 'NOT_A_GITHUB_REMOTE'
     | 'NOT_FOUND'
     | 'TIMEOUT'
-    | 'UNKNOWN';
+    | 'UNKNOWN'
+    | 'AI_NOT_AUTHENTICATED'
+    | 'AI_FAILED';
   message: string;
   stderr?: string;
+}
+
+/** Source of credentials the AI client can use. */
+export type AIAuthSource = 'claude-code' | 'api-key' | 'none';
+
+export interface AIAuthStatus {
+  available: boolean;
+  source: AIAuthSource;
+}
+
+export interface AIReviewResult {
+  summary: string;
+  /** Reported by SDK; may be 0 when using subscription auth. */
+  costUSD?: number;
+  durationMs?: number;
+}
+
+export interface AIReviewChunk {
+  prNumber: number;
+  /** Incremental text appended since the last chunk. */
+  text: string;
 }

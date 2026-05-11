@@ -1,5 +1,6 @@
 import { useUI } from '../store/ui';
 import { ThemeToggle } from './ThemeToggle';
+import { AIPanelToggle } from './AIPanelToggle';
 
 export function TitleBar() {
   const collapsed = useUI((s) => s.sidebarCollapsed);
@@ -24,6 +25,7 @@ export function TitleBar() {
         >
           {collapsed ? <PanelOpen /> : <PanelClose />}
         </button>
+        <AIPanelToggle />
         <ThemeToggle />
       </div>
     </div>

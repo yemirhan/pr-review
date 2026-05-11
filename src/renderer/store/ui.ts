@@ -12,6 +12,7 @@ export type Theme = 'dark' | 'light';
 
 const THEME_KEY = 'pr-review:theme';
 const COLLAPSE_KEY = 'pr-review:sidebarCollapsed';
+const AI_PANEL_KEY = 'pr-review:aiPanelCollapsed';
 const VIEWED_KEY = 'pr-review:viewed';
 
 function readTheme(): Theme {
@@ -28,6 +29,16 @@ function readCollapsed(): boolean {
     return localStorage.getItem(COLLAPSE_KEY) === '1';
   } catch {
     return false;
+  }
+}
+
+function readAIPanelCollapsed(): boolean {
+  try {
+    const v = localStorage.getItem(AI_PANEL_KEY);
+    // Default to collapsed — the panel is opt-in per session/PR.
+    return v == null ? true : v === '1';
+  } catch {
+    return true;
   }
 }
 
@@ -60,6 +71,7 @@ interface UIState {
 
   theme: Theme;
   sidebarCollapsed: boolean;
+  aiPanelCollapsed: boolean;
   viewed: Record<string, boolean>;
 
   selectRepo(id: string | null): void;
@@ -69,6 +81,8 @@ interface UIState {
   toggleTheme(): void;
   setSidebarCollapsed(collapsed: boolean): void;
   toggleSidebar(): void;
+  setAIPanelCollapsed(collapsed: boolean): void;
+  toggleAIPanel(): void;
   setViewed(key: string, viewed: boolean): void;
 
   draftKey(): string | null;
@@ -93,6 +107,7 @@ export const useUI = create<UIState>((set, get) => ({
 
   theme: readTheme(),
   sidebarCollapsed: readCollapsed(),
+  aiPanelCollapsed: readAIPanelCollapsed(),
   viewed: readViewed(),
 
   setTheme(theme) {
@@ -116,6 +131,17 @@ export const useUI = create<UIState>((set, get) => ({
   },
   toggleSidebar() {
     get().setSidebarCollapsed(!get().sidebarCollapsed);
+  },
+  setAIPanelCollapsed(collapsed) {
+    try {
+      localStorage.setItem(AI_PANEL_KEY, collapsed ? '1' : '0');
+    } catch {
+      /* ignore quota */
+    }
+    set({ aiPanelCollapsed: collapsed });
+  },
+  toggleAIPanel() {
+    get().setAIPanelCollapsed(!get().aiPanelCollapsed);
   },
   setViewed(key, viewed) {
     set((s) => {
