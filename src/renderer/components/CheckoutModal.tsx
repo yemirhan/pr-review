@@ -6,11 +6,14 @@ import type { Repo } from '@shared/types';
 export function CheckoutModal({
   repo,
   prNumber,
-  onClose
+  onClose,
+  onSuccess
 }: {
   repo: Repo;
   prNumber: number;
   onClose: () => void;
+  /** Fired when the checkout exits with code 0. Used to hand off back to callers. */
+  onSuccess?: () => void;
 }) {
   const [lines, setLines] = useState<{ channel: string; data: string }[]>([]);
   const [done, setDone] = useState<{ code: number } | null>(null);
@@ -72,13 +75,26 @@ export function CheckoutModal({
           <button className="btn" onClick={onClose}>
             Close
           </button>
-          <button
-            className="btn-primary disabled:opacity-50"
-            onClick={run}
-            disabled={running}
-          >
-            {running ? 'Running…' : 'Run'}
-          </button>
+          {done?.code === 0 ? (
+            <button
+              className="btn-primary"
+              onClick={() => {
+                onSuccess?.();
+                onClose();
+              }}
+              autoFocus
+            >
+              Done
+            </button>
+          ) : (
+            <button
+              className="btn-primary disabled:opacity-50"
+              onClick={run}
+              disabled={running}
+            >
+              {running ? 'Running…' : done ? 'Run again' : 'Run'}
+            </button>
+          )}
         </div>
       </div>
     </Backdrop>

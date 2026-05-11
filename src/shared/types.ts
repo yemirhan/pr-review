@@ -203,7 +203,10 @@ export interface GhError {
     | 'TIMEOUT'
     | 'UNKNOWN'
     | 'AI_NOT_AUTHENTICATED'
-    | 'AI_FAILED';
+    | 'AI_FAILED'
+    | 'AI_WORKING_TREE_DIRTY'
+    | 'AI_WRONG_BRANCH'
+    | 'GIT_PUSH_FAILED';
   message: string;
   stderr?: string;
 }
@@ -227,4 +230,22 @@ export interface AIReviewChunk {
   prNumber: number;
   /** Incremental text appended since the last chunk. */
   text: string;
+}
+
+export interface AIApplyPreflight {
+  currentBranch: string;
+  branchMatches: boolean;
+  dirty: boolean;
+}
+
+export type AIApplyProgress =
+  | { kind: 'tool'; name: string; path?: string }
+  | { kind: 'text'; text: string };
+
+export interface AIApplyResult {
+  diff: FileDiff[];
+  commitMessage: string;
+  assistantText: string;
+  /** Snapshot of untracked files captured before apply; used to scope discards. */
+  untrackedBefore: string[];
 }

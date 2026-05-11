@@ -19,6 +19,7 @@ export function PRDetail({ repo, prNumber }: { repo: Repo | null; prNumber: numb
   const [tab, setTab] = useState<Tab>('files');
   const [mergeOpen, setMergeOpen] = useState(false);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const [checkoutSuccessNonce, setCheckoutSuccessNonce] = useState(0);
 
   const detailQ = useQuery({
     queryKey: repo && prNumber != null ? qk.prDetail(repo.id, prNumber) : ['no-detail'],
@@ -170,7 +171,13 @@ export function PRDetail({ repo, prNumber }: { repo: Repo | null; prNumber: numb
                 headOid={pr.headRefOid}
               />
             </div>
-            <AIReviewPanel repoId={repo.id} prNumber={pr.number} />
+            <AIReviewPanel
+              repoId={repo.id}
+              prNumber={pr.number}
+              headOid={pr.headRefOid}
+              onRequestCheckout={() => setCheckoutOpen(true)}
+              checkoutSuccessNonce={checkoutSuccessNonce}
+            />
           </div>
         )}
         {tab === 'conversation' && <Conversation pr={pr} comments={commentsQ.data ?? []} />}
@@ -201,7 +208,15 @@ export function PRDetail({ repo, prNumber }: { repo: Repo | null; prNumber: numb
         />
       )}
       {checkoutOpen && (
-        <CheckoutModal repo={repo} prNumber={prNumber} onClose={() => setCheckoutOpen(false)} />
+        <CheckoutModal
+          repo={repo}
+          prNumber={prNumber}
+          onClose={() => setCheckoutOpen(false)}
+          onSuccess={() => {
+            setCheckoutSuccessNonce((n) => n + 1);
+            invalidatePR();
+          }}
+        />
       )}
     </div>
   );

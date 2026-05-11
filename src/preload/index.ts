@@ -13,7 +13,10 @@ import type {
   Editor,
   AIAuthStatus,
   AIReviewChunk,
-  AIReviewResult
+  AIReviewResult,
+  AIApplyPreflight,
+  AIApplyProgress,
+  AIApplyResult
 } from '@shared/types';
 
 export type Result<T> = { ok: true; data: T } | { ok: false; error: GhError };
@@ -64,12 +67,27 @@ const api = {
       return () => {
         ipcRenderer.removeListener('ai:review:chunk', handler);
       };
+    },
+    onAIApplyProgress(cb: (event: AIApplyProgress) => void): () => void {
+      const handler = (_e: unknown, event: AIApplyProgress) => cb(event);
+      ipcRenderer.on('ai:apply:progress', handler);
+      return () => {
+        ipcRenderer.removeListener('ai:apply:progress', handler);
+      };
     }
   },
   ai: {
     authStatus: () => call<AIAuthStatus>('ai:auth:status'),
     review: (repoId: string, num: number) =>
-      call<AIReviewResult>('ai:review', repoId, num)
+      call<AIReviewResult>('ai:review', repoId, num),
+    applyPreflight: (repoId: string, num: number) =>
+      call<AIApplyPreflight>('ai:apply:preflight', repoId, num),
+    apply: (repoId: string, num: number, review: string) =>
+      call<AIApplyResult>('ai:apply', repoId, num, review),
+    push: (repoId: string, message: string) =>
+      call<void>('ai:apply:push', repoId, message),
+    discard: (repoId: string, untrackedBefore: string[]) =>
+      call<void>('ai:apply:discard', repoId, untrackedBefore)
   },
   shell: {
     openExternal: (url: string) => call<void>('shell:openExternal', url)

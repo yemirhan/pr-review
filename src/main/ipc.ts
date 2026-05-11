@@ -11,13 +11,16 @@ import { getConflicts } from './git/conflicts';
 import { detectEditors } from './editors/detect';
 import { openInEditor } from './editors/open';
 import { AIClientError, getAuthStatus, reviewPR } from './ai/client';
+import { applyPreflight, applyReview } from './ai/apply';
+import { commitAndPush, discardWorkingChanges } from './git/apply';
 import type {
   ReviewDraft,
   MergeStrategy,
   Repo,
   CheckoutProgress,
   GhError,
-  AIReviewChunk
+  AIReviewChunk,
+  AIApplyProgress
 } from '@shared/types';
 
 function toErrPayload(err: unknown): GhError {
@@ -208,6 +211,67 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
         }
       });
       return result;
+    })
+  );
+
+  ipcMain.handle(
+    'ai:apply:preflight',
+    safe(async (_e, repoId: string, num: number) => {
+      const repo = findRepo(repoId);
+      if (!repo) throw new Error('Repo not found');
+      const pr = await getPR(repo.owner, repo.name, num);
+      return applyPreflight(repo.path, pr.headRefName);
+    })
+  );
+
+  ipcMain.handle(
+    'ai:apply',
+    safe(async (e, repoId: string, num: number, review: string) => {
+      const repo = findRepo(repoId);
+      if (!repo) throw new Error('Repo not found');
+      const pr = await getPR(repo.owner, repo.name, num);
+      const pre = await applyPreflight(repo.path, pr.headRefName);
+      if (!pre.branchMatches) {
+        throw new AIClientError(
+          'AI_WRONG_BRANCH',
+          `Repo is on branch "${pre.currentBranch}", but the PR head is "${pr.headRefName}". Check out the PR first.`
+        );
+      }
+      if (pre.dirty) {
+        throw new AIClientError(
+          'AI_WORKING_TREE_DIRTY',
+          'Working tree has uncommitted changes. Commit or stash them before applying AI changes.'
+        );
+      }
+      const win = BrowserWindow.fromWebContents(e.sender);
+      return applyReview({
+        repoPath: repo.path,
+        pr,
+        review,
+        onProgress: (event: AIApplyProgress) => {
+          win?.webContents.send('ai:apply:progress', event);
+        }
+      });
+    })
+  );
+
+  ipcMain.handle(
+    'ai:apply:push',
+    safe(async (_e, repoId: string, message: string) => {
+      const repo = findRepo(repoId);
+      if (!repo) throw new Error('Repo not found');
+      const trimmed = message.trim();
+      if (!trimmed) throw new Error('Commit message cannot be empty');
+      await commitAndPush(repo.path, trimmed);
+    })
+  );
+
+  ipcMain.handle(
+    'ai:apply:discard',
+    safe(async (_e, repoId: string, untrackedBefore: string[]) => {
+      const repo = findRepo(repoId);
+      if (!repo) throw new Error('Repo not found');
+      await discardWorkingChanges(repo.path, untrackedBefore ?? []);
     })
   );
 

@@ -1,6 +1,5 @@
 import { gh, ghJson } from './client';
-import { detectLanguage } from '../diff/lang';
-import parseDiff from 'parse-diff';
+import { mapPatchToFileDiff } from '../diff/parse';
 import type {
   PRSummary,
   PRDetail,
@@ -211,59 +210,7 @@ export async function getFiles(owner: string, name: string, num: number): Promis
     `repos/${owner}/${name}/pulls/${num}/files`,
     '--paginate'
   ]);
-
-  return raw.map((f) => {
-    const binary = !f.patch;
-    let hunks: FileDiff['hunks'] = [];
-    if (f.patch) {
-      // parse-diff expects a full unified diff including `diff --git` headers,
-      // but it also tolerates just the patch hunks. To be safe, wrap with minimal header.
-      const wrapped = `diff --git a/${f.previous_filename ?? f.filename} b/${f.filename}\n--- a/${f.previous_filename ?? f.filename}\n+++ b/${f.filename}\n${f.patch}`;
-      const parsed = parseDiff(wrapped);
-      const file = parsed[0];
-      if (file) {
-        hunks = file.chunks.map((chunk) => ({
-          oldStart: chunk.oldStart,
-          oldLines: chunk.oldLines,
-          newStart: chunk.newStart,
-          newLines: chunk.newLines,
-          header: chunk.content,
-          lines: chunk.changes.map((c) => {
-            const type: 'context' | 'add' | 'del' =
-              c.type === 'add' ? 'add' : c.type === 'del' ? 'del' : 'context';
-            // ln1/ln2 on context, ln on add/del
-            const oldNo =
-              c.type === 'add'
-                ? null
-                : c.type === 'del'
-                  ? c.ln
-                  : (c as { ln1: number }).ln1;
-            const newNo =
-              c.type === 'del'
-                ? null
-                : c.type === 'add'
-                  ? c.ln
-                  : (c as { ln2: number }).ln2;
-            // parse-diff content includes the leading +/-/space
-            const content = c.content.replace(/^[+\- ]/, '');
-            return { type, oldNo, newNo, content };
-          })
-        }));
-      }
-    }
-
-    return {
-      path: f.filename,
-      oldPath: f.previous_filename,
-      status: (f.status as FileDiff['status']) ?? 'modified',
-      additions: f.additions,
-      deletions: f.deletions,
-      language: detectLanguage(f.filename),
-      binary,
-      hunks,
-      patch: f.patch
-    };
-  });
+  return raw.map(mapPatchToFileDiff);
 }
 
 interface RawComment {
