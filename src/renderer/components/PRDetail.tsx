@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, qk, unwrap, ApiError } from '../lib/api';
 import { relativeTime } from '../lib/format';
 import { ChecksPill } from './ChecksPill';
@@ -10,6 +10,9 @@ import { CheckoutModal } from './CheckoutModal';
 import { ConflictsView } from './ConflictsView';
 import { EditorMenu } from './EditorMenu';
 import { AIReviewPanel } from './AIReviewPanel';
+import { FileTree } from './FileTree';
+import { DiffSearchBar, type DiffSearchBarHandle } from './DiffSearchBar';
+import { useDiffSearch, useScrollToMatch } from '../lib/diffSearch';
 import type { Repo } from '@shared/types';
 
 type Tab = 'files' | 'conversation' | 'commits' | 'conflicts';
@@ -20,6 +23,10 @@ export function PRDetail({ repo, prNumber }: { repo: Repo | null; prNumber: numb
   const [mergeOpen, setMergeOpen] = useState(false);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [checkoutSuccessNonce, setCheckoutSuccessNonce] = useState(0);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [visibleFilePath, setVisibleFilePath] = useState<string | null>(null);
+  const diffScrollRef = useRef<HTMLDivElement>(null);
+  const searchBarRef = useRef<DiffSearchBarHandle>(null);
 
   const detailQ = useQuery({
     queryKey: repo && prNumber != null ? qk.prDetail(repo.id, prNumber) : ['no-detail'],
@@ -38,6 +45,89 @@ export function PRDetail({ repo, prNumber }: { repo: Repo | null; prNumber: numb
     queryFn: () => unwrap(api.prs.comments(repo!.id, prNumber!)),
     enabled: !!repo && prNumber != null
   });
+
+  const search = useDiffSearch(filesQ.data ?? []);
+  const activeMatch = search.matches[search.current - 1];
+  useScrollToMatch(activeMatch, diffScrollRef);
+
+  // Clear / reset search when PR changes.
+  useEffect(() => {
+    setSearchOpen(false);
+    search.clear();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repo?.id, prNumber]);
+
+  // Intercept Cmd/Ctrl+F at the document level whenever a PR is open.
+  useEffect(() => {
+    if (!repo || prNumber == null) return;
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        if (tab !== 'files') setTab('files');
+        setSearchOpen(true);
+        // Defer focus so the input is mounted.
+        requestAnimationFrame(() => searchBarRef.current?.focus());
+      }
+    }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [repo, prNumber, tab]);
+
+  // Track which file is currently scrolled into the diff viewport. We pick
+  // the section whose top is closest to (but not past) the container's top
+  // edge — i.e. the file the user is reading right now.
+  useEffect(() => {
+    const container = diffScrollRef.current;
+    if (!container) return;
+    let frame = 0;
+    function update() {
+      frame = 0;
+      const el = diffScrollRef.current;
+      if (!el) return;
+      const sections = el.querySelectorAll<HTMLElement>('[data-file-path]');
+      if (sections.length === 0) {
+        setVisibleFilePath(null);
+        return;
+      }
+      const containerTop = el.getBoundingClientRect().top;
+      let best: { path: string; rel: number } | null = null;
+      sections.forEach((s) => {
+        const rel = s.getBoundingClientRect().top - containerTop;
+        // Pick the section whose top is at or just above the viewport top.
+        if (rel <= 8) {
+          if (!best || rel > best.rel) {
+            best = { path: s.dataset.filePath ?? '', rel };
+          }
+        }
+      });
+      if (best) {
+        setVisibleFilePath((cur) => (cur === best!.path ? cur : best!.path));
+      } else {
+        // None above yet — use the first one.
+        const first = sections[0].dataset.filePath ?? null;
+        setVisibleFilePath((cur) => (cur === first ? cur : first));
+      }
+    }
+    function onScroll() {
+      if (frame) return;
+      frame = requestAnimationFrame(update);
+    }
+    container.addEventListener('scroll', onScroll, { passive: true });
+    update();
+    return () => {
+      container.removeEventListener('scroll', onScroll);
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, [filesQ.data, tab]);
+
+  const onSelectFileFromTree = useCallback((path: string) => {
+    // Scroll the file's header into view at the top of the diff container.
+    const container = diffScrollRef.current;
+    if (!container) return;
+    const sel = `[data-file-header="${path.replace(/(["\\])/g, '\\$1')}"]`;
+    const target = container.querySelector(sel) as HTMLElement | null;
+    target?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }, []);
 
   if (!repo || prNumber == null) {
     return (
@@ -160,8 +250,36 @@ export function PRDetail({ repo, prNumber }: { repo: Repo | null; prNumber: numb
       <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
         {tab === 'files' && (
           <div className="flex-1 min-h-0 flex">
+            <aside className="w-[260px] shrink-0 border-r border-border-muted bg-canvas-subtle/30 overflow-y-auto">
+              <FileTree
+                files={filesQ.data ?? []}
+                repoId={repo.id}
+                prNumber={pr.number}
+                headOid={pr.headRefOid}
+                filesWithMatches={search.filesWithMatches}
+                activeFilePath={activeMatch?.filePath}
+                viewingFilePath={visibleFilePath ?? undefined}
+                onSelectFile={onSelectFileFromTree}
+              />
+            </aside>
             <div className="flex-1 min-w-0 flex flex-col">
+              {searchOpen && (
+                <DiffSearchBar
+                  ref={searchBarRef}
+                  query={search.query}
+                  onQueryChange={search.setQuery}
+                  current={search.current}
+                  total={search.total}
+                  onNext={search.next}
+                  onPrev={search.prev}
+                  onClose={() => {
+                    setSearchOpen(false);
+                    search.clear();
+                  }}
+                />
+              )}
               <DiffViewer
+                ref={diffScrollRef}
                 loading={filesQ.isLoading}
                 error={filesQ.error as ApiError | null}
                 files={filesQ.data ?? []}
@@ -169,6 +287,9 @@ export function PRDetail({ repo, prNumber }: { repo: Repo | null; prNumber: numb
                 repoId={repo.id}
                 prNumber={pr.number}
                 headOid={pr.headRefOid}
+                lineMatchMap={search.lineMatchMap}
+                activeMatch={activeMatch}
+                filesWithMatches={search.filesWithMatches}
               />
             </div>
             <AIReviewPanel

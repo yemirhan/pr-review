@@ -1,4 +1,4 @@
-import { useMemo, useState, useRef, useEffect, memo } from 'react';
+import { useMemo, useState, useRef, useEffect, memo, forwardRef } from 'react';
 import type {
   FileDiff,
   DiffHunk,
@@ -8,6 +8,7 @@ import type {
 import { highlightLines } from '../lib/highlight';
 import { useUI, viewedKey } from '../store/ui';
 import type { ApiError } from '../lib/api';
+import { lineKey, type DiffMatch } from '../lib/diffSearch';
 
 const LARGE_FILE_LINES = 1500;
 
@@ -19,9 +20,64 @@ interface Props {
   repoId: string;
   prNumber: number;
   headOid: string;
+  /** Map of `${filePath}:${hunkIdx}:${lineIdx}` → ranges to highlight. */
+  lineMatchMap?: Map<string, Array<{ start: number; end: number }>>;
+  /** The currently-active match (gets a stronger highlight). */
+  activeMatch?: DiffMatch;
+  /** Files containing at least one match — auto-expand them. */
+  filesWithMatches?: Set<string>;
 }
 
-export function DiffViewer({ loading, error, files, threads, repoId, prNumber, headOid }: Props) {
+export const DiffViewer = forwardRef<HTMLDivElement, Props>(function DiffViewer(
+  {
+    loading,
+    error,
+    files,
+    threads,
+    repoId,
+    prNumber,
+    headOid,
+    lineMatchMap,
+    activeMatch,
+    filesWithMatches
+  },
+  ref
+) {
+  // Lift collapsed state up so external callers (search, file tree) can
+  // expand a specific file imperatively.
+  const [collapsedOverrides, setCollapsedOverrides] = useState<
+    Map<string, boolean>
+  >(new Map());
+
+  // Reset overrides when the PR changes.
+  useEffect(() => {
+    setCollapsedOverrides(new Map());
+  }, [repoId, prNumber, headOid]);
+
+  // Auto-expand any file that currently has a search match.
+  useEffect(() => {
+    if (!filesWithMatches || filesWithMatches.size === 0) return;
+    setCollapsedOverrides((cur) => {
+      let changed = false;
+      const next = new Map(cur);
+      for (const path of filesWithMatches) {
+        if (next.get(path) !== false) {
+          next.set(path, false);
+          changed = true;
+        }
+      }
+      return changed ? next : cur;
+    });
+  }, [filesWithMatches]);
+
+  function setFileCollapsed(path: string, collapsed: boolean) {
+    setCollapsedOverrides((cur) => {
+      const next = new Map(cur);
+      next.set(path, collapsed);
+      return next;
+    });
+  }
+
   if (loading) return <div className="p-6 text-fg-muted">Loading diff…</div>;
   if (error)
     return (
@@ -34,7 +90,7 @@ export function DiffViewer({ loading, error, files, threads, repoId, prNumber, h
   if (files.length === 0) return <div className="p-6 text-fg-muted">No file changes.</div>;
 
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto">
+    <div ref={ref} className="flex-1 min-h-0 overflow-y-auto">
       <div className="p-3 space-y-3">
         {files.map((f) => (
           <FilePanel
@@ -44,25 +100,37 @@ export function DiffViewer({ loading, error, files, threads, repoId, prNumber, h
             repoId={repoId}
             prNumber={prNumber}
             headOid={headOid}
+            collapsedOverride={collapsedOverrides.get(f.path)}
+            onCollapsedChange={(c) => setFileCollapsed(f.path, c)}
+            lineMatchMap={lineMatchMap}
+            activeMatch={activeMatch}
           />
         ))}
       </div>
     </div>
   );
-}
+});
 
 const FilePanel = memo(function FilePanel({
   file,
   threads,
   repoId,
   prNumber,
-  headOid
+  headOid,
+  collapsedOverride,
+  onCollapsedChange,
+  lineMatchMap,
+  activeMatch
 }: {
   file: FileDiff;
   threads: InlineCommentThread[];
   repoId: string;
   prNumber: number;
   headOid: string;
+  collapsedOverride: boolean | undefined;
+  onCollapsedChange: (collapsed: boolean) => void;
+  lineMatchMap?: Map<string, Array<{ start: number; end: number }>>;
+  activeMatch?: DiffMatch;
 }) {
   const totalLines = file.hunks.reduce((acc, h) => acc + h.lines.length, 0);
 
@@ -70,9 +138,11 @@ const FilePanel = memo(function FilePanel({
   const viewed = useUI((s) => !!s.viewed[vKey]);
   const setViewed = useUI((s) => s.setViewed);
 
-  const [collapsed, setCollapsed] = useState(
-    file.binary || totalLines > LARGE_FILE_LINES || viewed
-  );
+  const defaultCollapsed =
+    file.binary || totalLines > LARGE_FILE_LINES || viewed;
+  const collapsed =
+    collapsedOverride !== undefined ? collapsedOverride : defaultCollapsed;
+
   const [fileComposerOpen, setFileComposerOpen] = useState(false);
   const [fileComposerBody, setFileComposerBody] = useState('');
 
@@ -89,7 +159,7 @@ const FilePanel = memo(function FilePanel({
     e.stopPropagation();
     const next = e.target.checked;
     setViewed(vKey, next);
-    if (next) setCollapsed(true);
+    if (next) onCollapsedChange(true);
   }
 
   function saveFileComment() {
@@ -106,13 +176,19 @@ const FilePanel = memo(function FilePanel({
 
   return (
     <section
-      className={`rounded-md border border-border bg-canvas-subtle/40 overflow-hidden transition-opacity ${
+      data-file-path={file.path}
+      className={`rounded-md border border-border bg-canvas-subtle/40 transition-opacity ${
         viewed && collapsed ? 'opacity-70' : ''
       }`}
     >
-      <header className="flex items-center justify-between px-3 h-10 border-b border-border-muted bg-canvas-inset/50 select-none gap-3">
+      <header
+        data-file-header={file.path}
+        className={`sticky -top-px z-10 flex items-center justify-between px-3 h-10 border-b border-border-muted bg-canvas-inset/95 backdrop-blur supports-[backdrop-filter]:bg-canvas-inset/80 select-none gap-3 rounded-t-md ${
+          collapsed ? 'rounded-b-md border-b-0' : ''
+        }`}
+      >
         <button
-          onClick={() => setCollapsed((c) => !c)}
+          onClick={() => onCollapsedChange(!collapsed)}
           className="flex items-center gap-2 min-w-0 flex-1 text-left"
         >
           <span className="text-fg-subtle text-xs">{collapsed ? '▸' : '▾'}</span>
@@ -136,11 +212,7 @@ const FilePanel = memo(function FilePanel({
             onClick={(e) => {
               e.stopPropagation();
               setFileComposerOpen((o) => !o);
-              if (!collapsed && !fileComposerOpen) {
-                // keep open
-              } else if (collapsed) {
-                setCollapsed(false);
-              }
+              if (collapsed) onCollapsedChange(false);
             }}
             className={`btn-icon h-7 w-7 ${fileDrafts.length > 0 ? 'text-accent' : ''}`}
             title="Comment on this file"
@@ -168,7 +240,7 @@ const FilePanel = memo(function FilePanel({
         </div>
       </header>
       {!collapsed && (
-        <div>
+        <div className="overflow-hidden rounded-b-md">
           {(fileDrafts.length > 0 || fileComposerOpen) && (
             <div className="px-3 pt-3 space-y-2 border-b border-border-muted pb-3 bg-canvas">
               {fileDrafts.map((d) => (
@@ -194,7 +266,12 @@ const FilePanel = memo(function FilePanel({
           {file.binary ? (
             <div className="p-4 text-sm text-fg-muted">Binary file not shown.</div>
           ) : (
-            <DiffBody file={file} threads={threads} />
+            <DiffBody
+              file={file}
+              threads={threads}
+              lineMatchMap={lineMatchMap}
+              activeMatch={activeMatch}
+            />
           )}
         </div>
       )}
@@ -323,9 +400,7 @@ interface RowItem {
 
 interface SelectionRange {
   hunkIndex: number;
-  /** Anchor index (where the drag started). */
   anchorIdx: number;
-  /** Current head index (where the drag is now). */
   headIdx: number;
 }
 
@@ -336,7 +411,17 @@ interface ComposerState {
   body: string;
 }
 
-function DiffBody({ file, threads }: { file: FileDiff; threads: InlineCommentThread[] }) {
+function DiffBody({
+  file,
+  threads,
+  lineMatchMap,
+  activeMatch
+}: {
+  file: FileDiff;
+  threads: InlineCommentThread[];
+  lineMatchMap?: Map<string, Array<{ start: number; end: number }>>;
+  activeMatch?: DiffMatch;
+}) {
   const draft = useUI((s) => s.getDraft());
   const addDraftComment = useUI((s) => s.addDraftComment);
   const removeDraftComment = useUI((s) => s.removeDraftComment);
@@ -350,7 +435,6 @@ function DiffBody({ file, threads }: { file: FileDiff; threads: InlineCommentThr
     return rows;
   }, [file.hunks]);
 
-  // Precompute the full code blob for highlighting (one big string per file).
   const codeForHighlight = useMemo(() => {
     const all: string[] = [];
     file.hunks.forEach((h) => h.lines.forEach((l) => all.push(l.content)));
@@ -375,7 +459,6 @@ function DiffBody({ file, threads }: { file: FileDiff; threads: InlineCommentThr
     };
   }, [file.language, codeForHighlight, shikiTheme]);
 
-  // Map (hunk, line) → global line index for token lookup.
   const lineGlobalIndex = useMemo(() => {
     const map: number[][] = [];
     let counter = 0;
@@ -388,7 +471,6 @@ function DiffBody({ file, threads }: { file: FileDiff; threads: InlineCommentThr
     return map;
   }, [file.hunks]);
 
-  // Build a map for inline comment threads keyed by newSide line.
   const threadsByLine = useMemo(() => {
     const m = new Map<number, InlineCommentThread[]>();
     threads.forEach((t) => {
@@ -400,7 +482,6 @@ function DiffBody({ file, threads }: { file: FileDiff; threads: InlineCommentThr
     return m;
   }, [threads]);
 
-  // Draft comments keyed by line.
   const draftsByLine = useMemo(() => {
     const m = new Map<number, DraftInlineComment[]>();
     draft.comments
@@ -417,8 +498,6 @@ function DiffBody({ file, threads }: { file: FileDiff; threads: InlineCommentThr
   const [selecting, setSelecting] = useState<SelectionRange | null>(null);
   const lastClickRef = useRef<{ hunkIndex: number; lineIndex: number } | null>(null);
 
-  // Global drag tracking: as the user moves the pointer after a +
-  // pointer-down, extend the selection to the row under the cursor.
   useEffect(() => {
     if (!selecting) return;
     function move(e: PointerEvent) {
@@ -456,7 +535,7 @@ function DiffBody({ file, threads }: { file: FileDiff; threads: InlineCommentThr
     hunkIndex: number,
     lineIndex: number
   ) {
-    e.preventDefault(); // suppress native text selection during drag
+    e.preventDefault();
     if (e.shiftKey && lastClickRef.current && lastClickRef.current.hunkIndex === hunkIndex) {
       const start = Math.min(lastClickRef.current.lineIndex, lineIndex);
       const end = Math.max(lastClickRef.current.lineIndex, lineIndex);
@@ -524,6 +603,17 @@ function DiffBody({ file, threads }: { file: FileDiff; threads: InlineCommentThr
             composer?.hunkIndex === it.hunkIndex && composer?.endIdx === it.lineIndex;
           const inSel = isInSelection(it.hunkIndex, it.lineIndex!);
 
+          const matchRanges =
+            lineMatchMap?.get(lineKey(file.path, it.hunkIndex, it.lineIndex!));
+          const isActiveLine =
+            activeMatch?.kind === 'line' &&
+            activeMatch.filePath === file.path &&
+            activeMatch.hunkIndex === it.hunkIndex &&
+            activeMatch.lineIndex === it.lineIndex;
+          const activeRange = isActiveLine
+            ? { start: activeMatch!.start, end: activeMatch!.end }
+            : undefined;
+
           return (
             <div key={`l-${idx}`}>
               <DiffRow
@@ -535,6 +625,8 @@ function DiffBody({ file, threads }: { file: FileDiff; threads: InlineCommentThr
                 content={line.content}
                 tokenHtml={tokenHtml}
                 inSelection={inSel}
+                matchRanges={matchRanges}
+                activeRange={activeRange}
                 onGutterPointerDown={onGutterPointerDown}
               />
               {lineThreads.map((t) => (
@@ -596,6 +688,8 @@ const DiffRow = memo(function DiffRow({
   content,
   tokenHtml,
   inSelection,
+  matchRanges,
+  activeRange,
   onGutterPointerDown
 }: {
   hunkIndex: number;
@@ -606,14 +700,15 @@ const DiffRow = memo(function DiffRow({
   content: string;
   tokenHtml: string | undefined;
   inSelection: boolean;
+  matchRanges?: Array<{ start: number; end: number }>;
+  activeRange?: { start: number; end: number };
   onGutterPointerDown: (
     e: React.PointerEvent<HTMLElement>,
     hunkIndex: number,
     lineIndex: number
   ) => void;
 }) {
-  const bg =
-    type === 'add' ? 'bg-diff-addBg' : type === 'del' ? 'bg-diff-delBg' : '';
+  const bg = type === 'add' ? 'bg-diff-addBg' : type === 'del' ? 'bg-diff-delBg' : '';
   const sign = type === 'add' ? '+' : type === 'del' ? '−' : ' ';
   const signColor =
     type === 'add' ? 'text-success' : type === 'del' ? 'text-danger' : 'text-fg-subtle';
@@ -621,6 +716,21 @@ const DiffRow = memo(function DiffRow({
   const selOverlay = inSelection
     ? 'shadow-[inset_2px_0_0_theme(colors.accent.DEFAULT)] bg-accent-subtle/60'
     : '';
+
+  const hasMatches = matchRanges && matchRanges.length > 0;
+  // When the line has search matches, give up shiki highlighting on that line
+  // so we can wrap the matched substrings cleanly. Most users won't care:
+  // the active line is usually scrolled into view.
+  const rendered = hasMatches ? (
+    <HighlightedContent content={content} ranges={matchRanges} activeRange={activeRange} />
+  ) : tokenHtml ? (
+    <code
+      className="flex-1 whitespace-pre pr-3 text-fg"
+      dangerouslySetInnerHTML={{ __html: tokenHtml }}
+    />
+  ) : (
+    <code className="flex-1 whitespace-pre pr-3 text-fg">{content || ' '}</code>
+  );
 
   return (
     <div
@@ -643,17 +753,54 @@ const DiffRow = memo(function DiffRow({
         +
       </button>
       <span className={`w-3 shrink-0 ${signColor}`}>{sign}</span>
-      <code
-        className="flex-1 whitespace-pre pr-3 text-fg"
-        dangerouslySetInnerHTML={
-          tokenHtml ? { __html: tokenHtml } : undefined
-        }
-      >
-        {tokenHtml ? undefined : content || ' '}
-      </code>
+      {rendered}
     </div>
   );
 });
+
+function HighlightedContent({
+  content,
+  ranges,
+  activeRange
+}: {
+  content: string;
+  ranges: Array<{ start: number; end: number }> | undefined;
+  activeRange?: { start: number; end: number };
+}) {
+  if (!ranges || ranges.length === 0) {
+    return <code className="flex-1 whitespace-pre pr-3 text-fg">{content || ' '}</code>;
+  }
+  const parts: React.ReactNode[] = [];
+  let cursor = 0;
+  ranges.forEach((r, i) => {
+    if (r.start > cursor) {
+      parts.push(content.slice(cursor, r.start));
+    }
+    const isActive =
+      activeRange && activeRange.start === r.start && activeRange.end === r.end;
+    parts.push(
+      <mark
+        key={i}
+        className={
+          isActive
+            ? 'bg-attention text-canvas-inset rounded-sm px-px ring-1 ring-attention-emphasis'
+            : 'bg-attention-subtle text-fg rounded-sm px-px'
+        }
+      >
+        {content.slice(r.start, r.end)}
+      </mark>
+    );
+    cursor = r.end;
+  });
+  if (cursor < content.length) {
+    parts.push(content.slice(cursor));
+  }
+  return (
+    <code className="flex-1 whitespace-pre pr-3 text-fg">
+      {parts}
+    </code>
+  );
+}
 
 function Gutter({
   num,

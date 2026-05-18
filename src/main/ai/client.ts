@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
-import { buildPathEnv } from './env';
+import { buildPathEnv, resolveClaudeCodeCliPath, spawnClaudeCode } from './env';
 import { buildReviewPrompt } from './prompt';
 import type {
   AIAuthStatus,
@@ -97,7 +97,9 @@ export async function reviewPR({
         includePartialMessages: true,
         maxTurns: 1,
         abortController,
-        env: { ...process.env, PATH: buildPathEnv() } as Record<string, string>
+        env: { ...process.env, PATH: buildPathEnv() } as Record<string, string>,
+        pathToClaudeCodeExecutable: resolveClaudeCodeCliPath(),
+        spawnClaudeCodeProcess: spawnClaudeCode
       }
     });
 

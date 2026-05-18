@@ -1,6 +1,6 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { AIClientError, getAuthStatus } from './client';
-import { buildPathEnv } from './env';
+import { buildPathEnv, resolveClaudeCodeCliPath, spawnClaudeCode } from './env';
 import { buildApplyPrompt, extractCommitMessage, stripCommitLine } from './applyPrompt';
 import {
   currentBranch,
@@ -101,7 +101,9 @@ export async function applyReview({
         cwd: repoPath,
         maxTurns: 25,
         abortController,
-        env: { ...process.env, PATH: buildPathEnv() } as Record<string, string>
+        env: { ...process.env, PATH: buildPathEnv() } as Record<string, string>,
+        pathToClaudeCodeExecutable: resolveClaudeCodeCliPath(),
+        spawnClaudeCodeProcess: spawnClaudeCode
       }
     });
 
