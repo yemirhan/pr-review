@@ -27,6 +27,7 @@ export const qk = {
   prDetail: (repoId: string, num: number) => ['pr', repoId, num] as const,
   prFiles: (repoId: string, num: number) => ['pr-files', repoId, num] as const,
   prComments: (repoId: string, num: number) => ['pr-comments', repoId, num] as const,
+  prChecks: (repoId: string, num: number) => ['pr-checks', repoId, num] as const,
   prConflicts: (repoId: string, num: number) => ['pr-conflicts', repoId, num] as const,
   aiReview: (repoId: string, num: number) => ['ai-review', repoId, num] as const,
   aiAuth: ['ai-auth'] as const,

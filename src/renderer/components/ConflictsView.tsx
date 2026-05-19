@@ -4,6 +4,7 @@ import { api, qk, unwrap, ApiError } from '../lib/api';
 import { highlightLines } from '../lib/highlight';
 import { useUI } from '../store/ui';
 import type { ConflictFile, Editor, Repo } from '@shared/types';
+import { Spinner } from './ui/spinner';
 
 export function ConflictsView({
   repo,
@@ -28,9 +29,12 @@ export function ConflictsView({
 
   if (conflictsQ.isLoading) {
     return (
-      <div className="p-6 text-fg-muted">
-        Fetching <code className="text-fg">{baseRefName}</code> + PR head, then running{' '}
-        <code className="text-fg">git merge-tree</code>…
+      <div className="p-6 flex items-start gap-3 text-fg-muted animate-fade-in">
+        <Spinner size="md" className="mt-0.5 text-accent" />
+        <div className="text-sm">
+          Fetching <code className="text-fg">{baseRefName}</code> + PR head, then running{' '}
+          <code className="text-fg">git merge-tree</code>…
+        </div>
       </div>
     );
   }

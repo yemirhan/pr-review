@@ -33,6 +33,8 @@ import {
   SelectValue
 } from './ui/select';
 import { cn } from '../lib/cn';
+import { Skeleton } from './ui/skeleton';
+import { Spinner } from './ui/spinner';
 
 type TabKey = 'appearance' | 'system' | 'clickup';
 
@@ -224,7 +226,11 @@ function SystemSection() {
           onClick={() => qc.invalidateQueries({ queryKey: qk.systemTools })}
           disabled={toolsQ.isFetching}
         >
-          <RefreshCw className={cn('h-3 w-3', toolsQ.isFetching && 'animate-spin')} />
+          {toolsQ.isFetching ? (
+            <Spinner size="xs" />
+          ) : (
+            <RefreshCw className="h-3 w-3" />
+          )}
           {toolsQ.isFetching ? 'Checking' : 'Recheck'}
         </Button>
       </div>
@@ -245,12 +251,9 @@ function SystemSection() {
       )}
 
       <div className="space-y-3">
-        {tools.map((tool) => (
-          <ToolRow key={tool.id} tool={tool} />
-        ))}
-        {toolsQ.isLoading && (
-          <div className="text-2xs text-fg-subtle">Checking system…</div>
-        )}
+        {toolsQ.isLoading
+          ? Array.from({ length: 2 }).map((_, i) => <ToolRowSkeleton key={i} />)
+          : tools.map((tool) => <ToolRow key={tool.id} tool={tool} />)}
       </div>
     </section>
   );
@@ -324,6 +327,25 @@ function ToolRow({ tool }: { tool: SystemTool }) {
           </Button>
         </div>
       )}
+    </div>
+  );
+}
+
+function ToolRowSkeleton() {
+  return (
+    <div className="rounded-md border border-border-muted p-4 space-y-3 animate-fade-in">
+      <div className="flex items-start gap-3">
+        <Skeleton className="h-4 w-4 rounded-full mt-0.5 shrink-0" />
+        <div className="flex-1 space-y-2">
+          <div className="flex items-center gap-2">
+            <Skeleton className="h-3.5 w-24" />
+            <Skeleton className="h-3 w-10" />
+            <Skeleton className="h-3 w-20" />
+          </div>
+          <Skeleton className="h-3 w-[70%]" />
+          <Skeleton className="h-3 w-[55%]" />
+        </div>
+      </div>
     </div>
   );
 }

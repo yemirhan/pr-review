@@ -2,6 +2,7 @@ import { dialog, ipcMain, BrowserWindow, shell } from 'electron';
 import { existsSync } from 'node:fs';
 import { GhClientError } from './gh/client';
 import { listPRs, getPR, getFiles, getComments } from './gh/prs';
+import { getChecks } from './gh/checks';
 import { submitReview } from './gh/review';
 import { editPRTitle } from './gh/edit';
 import { createPR, getRepoMeta, listBranches } from './gh/create';
@@ -208,6 +209,15 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       const repo = findRepo(repoId);
       if (!repo) throw new Error('Repo not found');
       return getComments(repo.owner, repo.name, num);
+    })
+  );
+
+  ipcMain.handle(
+    'prs:checks',
+    safe(async (_e, repoId: string, num: number) => {
+      const repo = findRepo(repoId);
+      if (!repo) throw new Error('Repo not found');
+      return getChecks(repo.owner, repo.name, num);
     })
   );
 

@@ -1,4 +1,5 @@
 import { useUI } from '../store/ui';
+import logoSrc from '../assets/pr-review-logo.png';
 import { AIPanelToggle } from './AIPanelToggle';
 
 export function TitleBar() {
@@ -12,9 +13,18 @@ export function TitleBar() {
         {/* spacer for the macOS traffic lights (~70px) */}
       </div>
       <div className="flex-1 flex items-center justify-center">
-        <span className="text-[12px] font-semibold uppercase tracking-[0.18em] text-fg-muted">
-          PR Review
-        </span>
+        <div className="flex items-center gap-2">
+          <img
+            src={logoSrc}
+            alt=""
+            className="h-6 w-6 rounded-md border border-border-muted bg-white object-cover"
+            draggable={false}
+            aria-hidden="true"
+          />
+          <span className="text-[12px] font-semibold uppercase tracking-[0.18em] text-fg-muted">
+            PR Review
+          </span>
+        </div>
       </div>
       <div className="flex items-center gap-1 no-drag">
         <button

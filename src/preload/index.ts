@@ -28,7 +28,8 @@ import type {
   ClickUpStatus,
   PRListState,
   CreatePRInput,
-  SystemTool
+  SystemTool,
+  PRCheckRun
 } from '@shared/types';
 
 export type Result<T> = { ok: true; data: T } | { ok: false; error: GhError };
@@ -50,6 +51,8 @@ const api = {
     files: (repoId: string, num: number) => call<FileDiff[]>('prs:files', repoId, num),
     comments: (repoId: string, num: number) =>
       call<InlineCommentThread[]>('prs:comments', repoId, num),
+    checks: (repoId: string, num: number) =>
+      call<PRCheckRun[]>('prs:checks', repoId, num),
     conflicts: (repoId: string, num: number, baseRefName: string) =>
       call<ConflictInfo>('prs:conflicts', repoId, num, baseRefName),
     editTitle: (repoId: string, num: number, title: string) =>

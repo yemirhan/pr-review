@@ -3,6 +3,7 @@ import { api, qk, unwrap, ApiError } from '../lib/api';
 import { useUI } from '../store/ui';
 import { useState } from 'react';
 import type { Repo } from '@shared/types';
+import { Skeleton } from './ui/skeleton';
 
 export function Sidebar({ repos, loading }: { repos: Repo[]; loading: boolean }) {
   const qc = useQueryClient();
@@ -61,7 +62,13 @@ export function Sidebar({ repos, loading }: { repos: Repo[]; loading: boolean })
         </button>
       </div>
       <div className="flex-1 overflow-y-auto px-2 pb-2 space-y-1">
-        {loading && <div className="px-2 text-xs text-fg-muted">Loading…</div>}
+        {loading && (
+          <div className="space-y-1 px-1 animate-fade-in">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <RepoRowSkeleton key={i} />
+            ))}
+          </div>
+        )}
         {repos.map((r, i) => {
           const c = counts[i];
           const count = c.data?.length ?? 0;
@@ -128,5 +135,17 @@ function ChevronLeft() {
         strokeLinejoin="round"
       />
     </svg>
+  );
+}
+
+function RepoRowSkeleton() {
+  return (
+    <div className="w-full px-2.5 py-2 rounded-lg border border-transparent flex items-center justify-between gap-2">
+      <div className="flex-1 min-w-0 space-y-1.5">
+        <Skeleton className="h-3.5 w-24" />
+        <Skeleton className="h-3 w-32" />
+      </div>
+      <Skeleton className="h-5 w-6 rounded-full" />
+    </div>
   );
 }

@@ -8,8 +8,10 @@ import { ReviewBar } from './ReviewBar';
 import { MergeModal } from './MergeModal';
 import { CheckoutModal } from './CheckoutModal';
 import { ConflictsView } from './ConflictsView';
+import { ChecksView } from './ChecksView';
 import { PRActionsMenu } from './PRActionsMenu';
 import { Button } from './ui/button';
+import { Skeleton } from './ui/skeleton';
 import { AIReviewPanel } from './AIReviewPanel';
 import { FileTree } from './FileTree';
 import { FileTreeAside } from './FileTreeAside';
@@ -19,7 +21,14 @@ import { ClickUpTaskTab } from './integrations/ClickUpTaskTab';
 import { ClickUpCommentsTab } from './integrations/ClickUpCommentsTab';
 import type { Repo } from '@shared/types';
 
-type Tab = 'files' | 'conversation' | 'commits' | 'conflicts' | 'clickup-task' | 'clickup-comments';
+type Tab =
+  | 'files'
+  | 'conversation'
+  | 'commits'
+  | 'checks'
+  | 'conflicts'
+  | 'clickup-task'
+  | 'clickup-comments';
 
 export function PRDetail({ repo, prNumber }: { repo: Repo | null; prNumber: number | null }) {
   const qc = useQueryClient();
@@ -156,7 +165,7 @@ export function PRDetail({ repo, prNumber }: { repo: Repo | null; prNumber: numb
   }
 
   if (detailQ.isLoading) {
-    return <div className="flex-1 flex items-center justify-center text-fg-muted">Loading…</div>;
+    return <PRDetailSkeleton />;
   }
   if (detailQ.error) {
     const ae = detailQ.error as ApiError;
@@ -306,6 +315,19 @@ export function PRDetail({ repo, prNumber }: { repo: Repo | null; prNumber: numb
             label={`Conversation (${(commentsQ.data?.length ?? 0) + pr.reviews.length})`}
           />
           <Tab id="commits" active={tab} onClick={setTab} label={`Commits (${pr.commits.length})`} />
+          <Tab
+            id="checks"
+            active={tab}
+            onClick={setTab}
+            label={`Checks${pr.checks.total > 0 ? ` (${pr.checks.passed}/${pr.checks.total})` : ''}`}
+            tone={
+              pr.checks.state === 'FAILURE'
+                ? 'danger'
+                : pr.checks.state === 'PENDING'
+                  ? 'attention'
+                  : undefined
+            }
+          />
           {pr.mergeable === false && (
             <Tab
               id="conflicts"
@@ -376,6 +398,7 @@ export function PRDetail({ repo, prNumber }: { repo: Repo | null; prNumber: numb
             )}
             {tab === 'conversation' && <Conversation pr={pr} comments={commentsQ.data ?? []} />}
             {tab === 'commits' && <Commits commits={pr.commits} />}
+            {tab === 'checks' && <ChecksView repo={repo} prNumber={pr.number} />}
             {tab === 'conflicts' && (
               <ConflictsView repo={repo} prNumber={pr.number} baseRefName={pr.baseRefName} />
             )}
@@ -489,22 +512,30 @@ function Tab({
   active: Tab;
   onClick: (t: Tab) => void;
   label: string;
-  tone?: 'danger';
+  tone?: 'danger' | 'attention';
 }) {
   const selected = active === id;
-  const dangerSel = tone === 'danger' && selected;
-  const dangerIdle = tone === 'danger' && !selected;
+  const toneSel =
+    tone === 'danger' && selected
+      ? 'bg-danger-subtle text-danger border border-danger/40'
+      : tone === 'attention' && selected
+        ? 'bg-attention-subtle text-attention border border-attention/40'
+        : null;
+  const toneIdle =
+    tone === 'danger' && !selected
+      ? 'text-danger hover:bg-danger-subtle/40 border border-transparent'
+      : tone === 'attention' && !selected
+        ? 'text-attention hover:bg-attention-subtle/40 border border-transparent'
+        : null;
   return (
     <button
       onClick={() => onClick(id)}
       className={`px-3 h-7 rounded-md text-sm font-medium transition-colors ${
-        dangerSel
-          ? 'bg-danger-subtle text-danger border border-danger/40'
-          : dangerIdle
-            ? 'text-danger hover:bg-danger-subtle/40 border border-transparent'
-            : selected
-              ? 'bg-canvas-overlay text-fg border border-border'
-              : 'text-fg-muted hover:text-fg hover:bg-canvas-subtle border border-transparent'
+        toneSel ??
+        toneIdle ??
+        (selected
+          ? 'bg-canvas-overlay text-fg border border-border'
+          : 'text-fg-muted hover:text-fg hover:bg-canvas-subtle border border-transparent')
       }`}
     >
       {label}
@@ -578,6 +609,55 @@ function Commits({
             <span className="flex-1 truncate text-sm">{c.messageHeadline}</span>
             <span className="text-2xs text-fg-muted">@{c.author.login}</span>
             <span className="text-2xs text-fg-subtle">{relativeTime(c.authoredDate)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PRDetailSkeleton() {
+  return (
+    <div className="flex-1 flex flex-col min-h-0 animate-fade-in">
+      <div className="px-5 py-4 border-b border-border-muted space-y-3">
+        <div className="flex items-center gap-2">
+          <Skeleton className="h-4 w-12" />
+          <Skeleton className="h-4 w-16" />
+          <Skeleton className="h-4 w-24" />
+        </div>
+        <Skeleton className="h-5 w-2/3" />
+        <div className="flex items-center gap-3">
+          <Skeleton className="h-3.5 w-28" />
+          <Skeleton className="h-3.5 w-20" />
+          <Skeleton className="h-3.5 w-24" />
+          <Skeleton className="h-3.5 w-16" />
+        </div>
+      </div>
+      <div className="px-5 py-2 border-b border-border-muted flex items-center gap-3">
+        <Skeleton className="h-6 w-16" />
+        <Skeleton className="h-6 w-24" />
+        <Skeleton className="h-6 w-20" />
+      </div>
+      <div className="flex-1 p-4 space-y-3 overflow-hidden">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <div
+            key={i}
+            className="rounded-md border border-border-muted overflow-hidden"
+          >
+            <div className="px-3 py-2 border-b border-border-muted flex items-center gap-2">
+              <Skeleton className="h-3.5 w-3.5 rounded-sm" />
+              <Skeleton className="h-3.5 w-48" />
+              <Skeleton className="h-3.5 w-10 ml-auto" />
+            </div>
+            <div className="p-3 space-y-1.5">
+              {Array.from({ length: 5 }).map((_, j) => (
+                <Skeleton
+                  key={j}
+                  className="h-3"
+                  // staggered widths for a more organic feel
+                />
+              ))}
+            </div>
           </div>
         ))}
       </div>

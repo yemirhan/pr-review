@@ -72,6 +72,25 @@ export interface PRSummary {
   changedFiles: number;
 }
 
+export type PRCheckBucket = 'pass' | 'fail' | 'pending' | 'skipping' | 'cancel';
+
+export interface PRCheckRun {
+  /** Human-readable check name (job name for Actions). */
+  name: string;
+  /** Containing workflow file/name, if from GitHub Actions. */
+  workflow: string | null;
+  /** Raw state from gh (e.g. SUCCESS, FAILURE, IN_PROGRESS, QUEUED, NEUTRAL). */
+  state: string | null;
+  /** Normalized bucket: pass | fail | pending | skipping | cancel. */
+  bucket: PRCheckBucket;
+  /** Link back to the run on github.com. */
+  link: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  description: string | null;
+  event: string | null;
+}
+
 export interface PRCommit {
   oid: string;
   messageHeadline: string;

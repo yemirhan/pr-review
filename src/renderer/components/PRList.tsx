@@ -8,6 +8,7 @@ import { CreatePRModal } from './CreatePRModal';
 import { Button } from './ui/button';
 import { Plus, RefreshCw } from 'lucide-react';
 import { useMemo, useState, useEffect } from 'react';
+import { Skeleton } from './ui/skeleton';
 
 type FilterMode = 'all' | 'ready' | 'draft';
 
@@ -144,7 +145,11 @@ export function PRList({ repo }: { repo: Repo | null }) {
       </div>
       <div className="flex-1 overflow-y-auto">
         {prsQ.isLoading && (
-          <div className="p-4 text-sm text-fg-muted">Loading PRs…</div>
+          <div className="animate-fade-in">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <PRRowSkeleton key={i} />
+            ))}
+          </div>
         )}
         {prsQ.error && (
           <div className="p-4 text-sm text-danger">
@@ -235,6 +240,29 @@ function PRRow({
         </div>
       </div>
     </button>
+  );
+}
+
+function PRRowSkeleton() {
+  return (
+    <div className="block w-full px-3 py-2.5 border-b border-border-muted">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 flex-1 space-y-1.5">
+          <div className="flex items-center gap-1.5">
+            <Skeleton className="h-3.5 w-10" />
+            <Skeleton className="h-3 w-12" />
+            <Skeleton className="h-3 w-20" />
+          </div>
+          <Skeleton className="h-3.5 w-[85%]" />
+          <Skeleton className="h-3 w-[55%]" />
+          <Skeleton className="h-3 w-2/3" />
+        </div>
+        <div className="flex flex-col items-end gap-1.5 shrink-0">
+          <Skeleton className="h-4 w-12" />
+          <Skeleton className="h-4 w-16" />
+        </div>
+      </div>
+    </div>
   );
 }
 

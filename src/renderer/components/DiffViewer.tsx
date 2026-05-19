@@ -9,6 +9,7 @@ import { highlightLines } from '../lib/highlight';
 import { useUI, viewedKey } from '../store/ui';
 import type { ApiError } from '../lib/api';
 import { lineKey, type DiffMatch } from '../lib/diffSearch';
+import { Skeleton } from './ui/skeleton';
 
 const LARGE_FILE_LINES = 1500;
 
@@ -78,7 +79,7 @@ export const DiffViewer = forwardRef<HTMLDivElement, Props>(function DiffViewer(
     });
   }
 
-  if (loading) return <div className="p-6 text-fg-muted">Loading diff…</div>;
+  if (loading) return <DiffViewerSkeleton />;
   if (error)
     return (
       <div className="p-6">
@@ -907,6 +908,41 @@ function Composer({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function DiffViewerSkeleton() {
+  return (
+    <div className="flex-1 overflow-hidden p-3 space-y-3 animate-fade-in">
+      {Array.from({ length: 3 }).map((_, i) => (
+        <div
+          key={i}
+          className="rounded-md border border-border-muted overflow-hidden"
+        >
+          <div className="px-3 py-2 border-b border-border-muted flex items-center gap-2 bg-canvas-inset/60">
+            <Skeleton className="h-3.5 w-3.5 rounded-sm" />
+            <Skeleton className="h-3.5 w-56" />
+            <div className="ml-auto flex items-center gap-2">
+              <Skeleton className="h-3.5 w-10" />
+              <Skeleton className="h-3.5 w-10" />
+            </div>
+          </div>
+          <div className="p-3 space-y-1.5 font-mono">
+            {[
+              '95%',
+              '70%',
+              '85%',
+              '40%',
+              '78%',
+              '60%',
+              '88%'
+            ].map((w, j) => (
+              <Skeleton key={j} className="h-3" style={{ width: w }} />
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

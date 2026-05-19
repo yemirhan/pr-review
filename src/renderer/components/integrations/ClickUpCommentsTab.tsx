@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { api, qk, unwrap, ApiError } from '../../lib/api';
 import { relativeTime } from '../../lib/format';
+import { Skeleton } from '../ui/skeleton';
 
 export function ClickUpCommentsTab({ taskId }: { taskId: string }) {
   const q = useQuery({
@@ -9,7 +10,25 @@ export function ClickUpCommentsTab({ taskId }: { taskId: string }) {
   });
 
   if (q.isLoading) {
-    return <div className="p-5 text-fg-muted text-sm">Loading…</div>;
+    return (
+      <div className="p-5 space-y-3 animate-fade-in">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <div
+            key={i}
+            className="rounded-md border border-border-muted bg-canvas-subtle/40 p-4 space-y-2"
+          >
+            <div className="flex items-center gap-2">
+              <Skeleton className="h-6 w-6 rounded-full" />
+              <Skeleton className="h-3.5 w-24" />
+              <Skeleton className="h-3 w-16 ml-auto" />
+            </div>
+            <Skeleton className="h-3 w-[92%]" />
+            <Skeleton className="h-3 w-[78%]" />
+            <Skeleton className="h-3 w-[40%]" />
+          </div>
+        ))}
+      </div>
+    );
   }
   if (q.error) {
     return (

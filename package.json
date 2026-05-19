@@ -78,7 +78,7 @@
           ]
         }
       ],
-      "icon": "build/icon.icns",
+      "icon": "build/icon.png",
       "identity": null
     }
   }
