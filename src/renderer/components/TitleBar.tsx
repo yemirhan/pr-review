@@ -1,5 +1,4 @@
 import { useUI } from '../store/ui';
-import { ThemeToggle } from './ThemeToggle';
 import { AIPanelToggle } from './AIPanelToggle';
 
 export function TitleBar() {
@@ -27,7 +26,6 @@ export function TitleBar() {
           {collapsed ? <PanelOpen /> : <PanelClose />}
         </button>
         <AIPanelToggle />
-        <ThemeToggle />
         <button
           onClick={() => setSettingsOpen(true)}
           className="btn-icon"
@@ -59,14 +57,15 @@ function PanelClose() {
 
 function Gear() {
   return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
-      <circle cx="8" cy="8" r="2" stroke="currentColor" strokeWidth="1.4" />
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
       <path
-        d="M8 1.5v2M8 12.5v2M14.5 8h-2M3.5 8h-2M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4M12.6 12.6l-1.4-1.4M4.8 4.8L3.4 3.4"
+        d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.04 1.56V21a2 2 0 1 1-4 0v-.08a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.04H3a2 2 0 1 1 0-4h.08A1.7 1.7 0 0 0 4.64 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.64a1.7 1.7 0 0 0 1.04-1.56V3a2 2 0 1 1 4 0v.08A1.7 1.7 0 0 0 15 4.64a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.36 9a1.7 1.7 0 0 0 1.56 1.04H21a2 2 0 1 1 0 4h-.08a1.7 1.7 0 0 0-1.52 1.04Z"
         stroke="currentColor"
-        strokeWidth="1.4"
+        strokeWidth="1.6"
         strokeLinecap="round"
+        strokeLinejoin="round"
       />
+      <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.6" />
     </svg>
   );
 }

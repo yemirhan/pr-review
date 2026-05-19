@@ -53,19 +53,26 @@ export function ClickUpTaskTab({ task }: { task: ClickUpTask }) {
         )}
         {task.tags && task.tags.length > 0 && (
           <div className="mt-2 flex items-center gap-2 flex-wrap">
-            {task.tags.map((t) => (
-              <span
-                key={t.name}
-                className="text-2xs px-2 py-0.5 rounded"
-                style={{
-                  backgroundColor: t.tag_bg ?? 'transparent',
-                  color: t.tag_fg ?? undefined,
-                  border: '1px solid var(--c-border-muted)'
-                }}
-              >
-                {t.name}
-              </span>
-            ))}
+            {task.tags.map((t) => {
+              const base = t.tag_fg || t.tag_bg || '#888';
+              return (
+                <span
+                  key={t.name}
+                  className="inline-flex items-center gap-1.5 text-2xs px-2 py-0.5 rounded-full border font-medium"
+                  style={{
+                    backgroundColor: `${base}1f`,
+                    color: base,
+                    borderColor: `${base}66`
+                  }}
+                >
+                  <span
+                    className="h-1.5 w-1.5 rounded-full"
+                    style={{ backgroundColor: base }}
+                  />
+                  {t.name}
+                </span>
+              );
+            })}
           </div>
         )}
       </div>

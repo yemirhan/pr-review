@@ -14,6 +14,9 @@ import type {
   AIAuthStatus,
   AIReviewChunk,
   AIReviewResult,
+  AIReviewOptions,
+  AIChatRequest,
+  AIChatResult,
   AIApplyPreflight,
   AIApplyProgress,
   AIApplyResult,
@@ -23,7 +26,9 @@ import type {
   ClickUpComment,
   ClickUpAuthResult,
   ClickUpStatus,
-  PRListState
+  PRListState,
+  CreatePRInput,
+  SystemTool
 } from '@shared/types';
 
 export type Result<T> = { ok: true; data: T } | { ok: false; error: GhError };
@@ -48,7 +53,11 @@ const api = {
     conflicts: (repoId: string, num: number, baseRefName: string) =>
       call<ConflictInfo>('prs:conflicts', repoId, num, baseRefName),
     editTitle: (repoId: string, num: number, title: string) =>
-      call<void>('prs:editTitle', repoId, num, title)
+      call<void>('prs:editTitle', repoId, num, title),
+    create: (repoId: string, input: CreatePRInput) =>
+      call<number>('prs:create', repoId, input),
+    branches: (repoId: string) =>
+      call<{ defaultBranch: string; branches: string[] }>('prs:branches', repoId)
   },
   editors: {
     list: () => call<Editor[]>('editors:list'),
@@ -88,8 +97,10 @@ const api = {
   },
   ai: {
     authStatus: () => call<AIAuthStatus>('ai:auth:status'),
-    review: (repoId: string, num: number) =>
-      call<AIReviewResult>('ai:review', repoId, num),
+    review: (repoId: string, num: number, opts: AIReviewOptions, streamId: string) =>
+      call<AIReviewResult>('ai:review', repoId, num, opts, streamId),
+    chat: (repoId: string, num: number, req: AIChatRequest) =>
+      call<AIChatResult>('ai:chat', repoId, num, req),
     applyPreflight: (repoId: string, num: number) =>
       call<AIApplyPreflight>('ai:apply:preflight', repoId, num),
     apply: (repoId: string, num: number, review: string) =>
@@ -101,6 +112,9 @@ const api = {
   },
   shell: {
     openExternal: (url: string) => call<void>('shell:openExternal', url)
+  },
+  system: {
+    tools: () => call<SystemTool[]>('system:tools')
   },
   integrations: {
     clickup: {

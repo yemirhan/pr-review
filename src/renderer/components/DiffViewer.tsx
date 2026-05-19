@@ -575,9 +575,14 @@ function DiffBody({
     return lineIndex >= lo && lineIndex <= hi;
   }
 
+  const diffFontSize = useUI((s) => s.diffFontSize);
+  const diffDensity = useUI((s) => s.diffDensity);
+  const lineHeight = diffDensity === 'comfortable' ? 1.9 : 1.45;
+
   return (
     <div
-      className={`font-mono text-xs leading-5 ${selecting ? 'select-none cursor-row-resize' : ''}`}
+      className={`font-mono ${selecting ? 'select-none cursor-row-resize' : ''}`}
+      style={{ fontSize: `${diffFontSize}px`, lineHeight }}
     >
       <div className="bg-canvas">
         {items.map((it, idx) => {
@@ -586,7 +591,7 @@ function DiffBody({
             return (
               <div
                 key={`h-${idx}`}
-                className="flex items-center gap-2 px-2 h-5 text-fg-subtle bg-canvas-inset/40 border-y border-border-muted"
+                className="flex items-center gap-2 px-2 py-0.5 text-fg-subtle bg-canvas-inset/40 border-y border-border-muted"
               >
                 <code className="truncate">{h.header}</code>
               </div>
@@ -742,7 +747,7 @@ const DiffRow = memo(function DiffRow({
       <Gutter num={newNo} variant="new" />
       <button
         onPointerDown={(e) => onGutterPointerDown(e, hunkIndex, lineIndex)}
-        className={`w-4 shrink-0 text-xs transition-opacity ${
+        className={`w-4 shrink-0 transition-opacity ${
           inSelection
             ? 'opacity-100 text-accent'
             : 'text-fg-subtle opacity-0 group-hover:opacity-100 hover:text-accent'

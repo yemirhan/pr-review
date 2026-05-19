@@ -31,6 +31,7 @@ export const qk = {
   aiReview: (repoId: string, num: number) => ['ai-review', repoId, num] as const,
   aiAuth: ['ai-auth'] as const,
   editors: ['editors'] as const,
+  systemTools: ['system', 'tools'] as const,
   clickupConfig: ['clickup', 'config'] as const,
   clickupTaskByBranch: (repoId: string, branch: string) =>
     ['clickup', 'task', repoId, branch] as const,

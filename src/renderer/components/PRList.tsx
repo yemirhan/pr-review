@@ -4,6 +4,9 @@ import { useUI } from '../store/ui';
 import type { Repo, PRSummary, PRListState } from '@shared/types';
 import { relativeTime } from '../lib/format';
 import { ChecksPill } from './ChecksPill';
+import { CreatePRModal } from './CreatePRModal';
+import { Button } from './ui/button';
+import { Plus, RefreshCw } from 'lucide-react';
 import { useMemo, useState, useEffect } from 'react';
 
 type FilterMode = 'all' | 'ready' | 'draft';
@@ -17,6 +20,7 @@ export function PRList({ repo }: { repo: Repo | null }) {
   const [debounced, setDebounced] = useState('');
   const [filter, setFilter] = useState<FilterMode>('all');
   const [state, setState] = useState<PRListState>('open');
+  const [createOpen, setCreateOpen] = useState(false);
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(query), 150);
@@ -75,13 +79,26 @@ export function PRList({ repo }: { repo: Repo | null }) {
               · {prsQ.data?.length ?? 0} {state}
             </span>
           </div>
-          <button
-            className="btn-ghost"
-            onClick={() => qc.invalidateQueries({ queryKey: qk.prs(repo.id, state) })}
-            title="Refresh"
-          >
-            ↻
-          </button>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => setCreateOpen(true)}
+              title="New pull request"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              New PR
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => qc.invalidateQueries({ queryKey: qk.prs(repo.id, state) })}
+              title="Refresh"
+              aria-label="Refresh"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+            </Button>
+          </div>
         </div>
         <div className="flex gap-1 mb-2">
           {(['open', 'merged', 'closed'] as PRListState[]).map((s) => (
@@ -146,6 +163,17 @@ export function PRList({ repo }: { repo: Repo | null }) {
           />
         ))}
       </div>
+      <CreatePRModal
+        repo={repo}
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        onCreated={(num) => {
+          setCreateOpen(false);
+          setState('open');
+          qc.invalidateQueries({ queryKey: qk.prs(repo.id, 'open') });
+          selectPR(num);
+        }}
+      />
     </div>
   );
 }

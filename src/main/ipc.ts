@@ -4,6 +4,7 @@ import { GhClientError } from './gh/client';
 import { listPRs, getPR, getFiles, getComments } from './gh/prs';
 import { submitReview } from './gh/review';
 import { editPRTitle } from './gh/edit';
+import { createPR, getRepoMeta, listBranches } from './gh/create';
 import { mergePR } from './gh/merge';
 import { checkoutPR } from './gh/checkout';
 import { listRepos, addRepo, removeRepo, findRepo } from './repo/store';
@@ -11,7 +12,8 @@ import { inspectRepo } from './repo/inspect';
 import { getConflicts } from './git/conflicts';
 import { detectEditors } from './editors/detect';
 import { openInEditor } from './editors/open';
-import { AIClientError, getAuthStatus, reviewPR } from './ai/client';
+import { detectSystemTools } from './system/detect';
+import { AIClientError, chatPR, getAuthStatus, reviewPR } from './ai/client';
 import { applyPreflight, applyReview } from './ai/apply';
 import { commitAndPush, discardWorkingChanges } from './git/apply';
 import {
@@ -40,11 +42,15 @@ import type {
   CheckoutProgress,
   GhError,
   AIReviewChunk,
+  AIReviewOptions,
+  AIChatRequest,
   AIApplyProgress,
+  ClickUpTask,
   ClickUpConfig,
   ClickUpRepoConfig,
   ClickUpLookupResult,
-  PRListState
+  PRListState,
+  CreatePRInput
 } from '@shared/types';
 
 function toErrPayload(err: unknown): GhError {
@@ -60,6 +66,22 @@ function toErrPayload(err: unknown): GhError {
     return { code, message: err.message };
   }
   return { code: 'UNKNOWN', message: String(err) };
+}
+
+/**
+ * Best-effort ClickUp task lookup for AI context. Swallows all errors —
+ * a missing/invalid task should not block a review.
+ */
+async function tryLookupClickUpTask(branch: string): Promise<ClickUpTask | null> {
+  try {
+    const token = getApiToken();
+    if (!token) return null;
+    const id = parseTaskIdFromBranch(branch);
+    if (!id) return null;
+    return await getTask(token, id, getTeamId());
+  } catch {
+    return null;
+  }
 }
 
 /** Wrap a handler so errors come back to renderer as plain { error } objects. */
@@ -131,6 +153,41 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       const repo = findRepo(repoId);
       if (!repo) throw new Error('Repo not found');
       return getFiles(repo.owner, repo.name, num);
+    })
+  );
+
+  ipcMain.handle(
+    'prs:create',
+    safe(async (_e, repoId: string, input: CreatePRInput) => {
+      const repo = findRepo(repoId);
+      if (!repo) throw new Error('Repo not found');
+      const title = input.title.trim();
+      const base = input.base.trim();
+      const head = input.head.trim();
+      if (!title) throw new Error('Title cannot be empty');
+      if (!base) throw new Error('Base branch is required');
+      if (!head) throw new Error('Head branch is required');
+      if (base === head) throw new Error('Base and head must differ');
+      return createPR(repo.owner, repo.name, {
+        title,
+        base,
+        head,
+        body: input.body ?? '',
+        draft: !!input.draft
+      });
+    })
+  );
+
+  ipcMain.handle(
+    'prs:branches',
+    safe(async (_e, repoId: string) => {
+      const repo = findRepo(repoId);
+      if (!repo) throw new Error('Repo not found');
+      const [meta, branches] = await Promise.all([
+        getRepoMeta(repo.owner, repo.name),
+        listBranches(repo.owner, repo.name)
+      ]);
+      return { defaultBranch: meta.defaultBranch, branches };
     })
   );
 
@@ -232,19 +289,52 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
   ipcMain.handle(
     'ai:review',
-    safe(async (e, repoId: string, num: number) => {
+    safe(async (e, repoId: string, num: number, opts: AIReviewOptions, streamId: string) => {
       const repo = findRepo(repoId);
       if (!repo) throw new Error('Repo not found');
       const [pr, files] = await Promise.all([
         getPR(repo.owner, repo.name, num),
         getFiles(repo.owner, repo.name, num)
       ]);
+      const clickUpTask = opts.includeClickUpTask
+        ? await tryLookupClickUpTask(pr.headRefName)
+        : null;
       const win = BrowserWindow.fromWebContents(e.sender);
       const result = await reviewPR({
         pr,
         files,
+        mode: opts.mode,
+        clickUpTask,
         onChunk: (text) => {
-          const chunk: AIReviewChunk = { prNumber: num, text };
+          const chunk: AIReviewChunk = { prNumber: num, streamId, text };
+          win?.webContents.send('ai:review:chunk', chunk);
+        }
+      });
+      return result;
+    })
+  );
+
+  ipcMain.handle(
+    'ai:chat',
+    safe(async (e, repoId: string, num: number, req: AIChatRequest) => {
+      const repo = findRepo(repoId);
+      if (!repo) throw new Error('Repo not found');
+      const [pr, files] = await Promise.all([
+        getPR(repo.owner, repo.name, num),
+        getFiles(repo.owner, repo.name, num)
+      ]);
+      const clickUpTask = req.includeClickUpTask
+        ? await tryLookupClickUpTask(pr.headRefName)
+        : null;
+      const win = BrowserWindow.fromWebContents(e.sender);
+      const result = await chatPR({
+        pr,
+        files,
+        history: req.history,
+        message: req.message,
+        clickUpTask,
+        onChunk: (text) => {
+          const chunk: AIReviewChunk = { prNumber: num, streamId: req.streamId, text };
           win?.webContents.send('ai:review:chunk', chunk);
         }
       });
@@ -427,6 +517,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       }
       return getTaskComments(token, taskId);
     })
+  );
+
+  // System ----------------------------------------------------------------
+  ipcMain.handle(
+    'system:tools',
+    safe(async () => detectSystemTools())
   );
 
   // Misc ------------------------------------------------------------------

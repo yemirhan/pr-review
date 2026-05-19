@@ -3,10 +3,14 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { buildPathEnv, resolveClaudeCodeCliPath, spawnClaudeCode } from './env';
-import { buildReviewPrompt } from './prompt';
+import { buildChatPrompt, buildReviewPrompt } from './prompt';
 import type {
   AIAuthStatus,
+  AIChatMessage,
+  AIChatResult,
+  AIReviewMode,
   AIReviewResult,
+  ClickUpTask,
   FileDiff,
   GhError,
   PRDetail
@@ -47,6 +51,18 @@ export function getAuthStatus(): AIAuthStatus {
 interface ReviewParams {
   pr: PRDetail;
   files: FileDiff[];
+  mode: AIReviewMode;
+  clickUpTask?: ClickUpTask | null;
+  onChunk?: (text: string) => void;
+  signal?: AbortSignal;
+}
+
+interface ChatParams {
+  pr: PRDetail;
+  files: FileDiff[];
+  history: AIChatMessage[];
+  message: string;
+  clickUpTask?: ClickUpTask | null;
   onChunk?: (text: string) => void;
   signal?: AbortSignal;
 }
@@ -67,6 +83,8 @@ function extractDeltaText(event: unknown): string {
 export async function reviewPR({
   pr,
   files,
+  mode,
+  clickUpTask,
   onChunk,
   signal
 }: ReviewParams): Promise<AIReviewResult> {
@@ -78,7 +96,7 @@ export async function reviewPR({
     );
   }
 
-  const prompt = buildReviewPrompt(pr, files);
+  const prompt = buildReviewPrompt({ pr, files, mode, clickUpTask });
 
   const abortController = new AbortController();
   const onAbort = () => abortController.abort();
@@ -135,7 +153,88 @@ export async function reviewPR({
       throw new AIClientError('AI_FAILED', 'Claude returned an empty review.');
     }
 
-    return { summary: finalText, costUSD, durationMs };
+    return { summary: finalText, mode, costUSD, durationMs };
+  } catch (err) {
+    if (err instanceof AIClientError) throw err;
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new AIClientError('AI_FAILED', msg);
+  } finally {
+    signal?.removeEventListener('abort', onAbort);
+  }
+}
+
+export async function chatPR({
+  pr,
+  files,
+  history,
+  message,
+  clickUpTask,
+  onChunk,
+  signal
+}: ChatParams): Promise<AIChatResult> {
+  const auth = getAuthStatus();
+  if (!auth.available) {
+    throw new AIClientError(
+      'AI_NOT_AUTHENTICATED',
+      'Claude is not authenticated. Sign in via `claude` CLI or set ANTHROPIC_API_KEY.'
+    );
+  }
+
+  const prompt = buildChatPrompt({ pr, files, history, message, clickUpTask });
+
+  const abortController = new AbortController();
+  const onAbort = () => abortController.abort();
+  signal?.addEventListener('abort', onAbort);
+
+  try {
+    const response = query({
+      prompt,
+      options: {
+        model: REVIEW_MODEL,
+        permissionMode: 'plan',
+        tools: [],
+        allowedTools: [],
+        settingSources: [],
+        persistSession: false,
+        includePartialMessages: true,
+        maxTurns: 1,
+        abortController,
+        env: { ...process.env, PATH: buildPathEnv() } as Record<string, string>,
+        pathToClaudeCodeExecutable: resolveClaudeCodeCliPath(),
+        spawnClaudeCodeProcess: spawnClaudeCode
+      }
+    });
+
+    let finalText = '';
+    let costUSD: number | undefined;
+    let durationMs: number | undefined;
+
+    for await (const msg of response) {
+      if (msg.type === 'stream_event') {
+        const delta = extractDeltaText(msg.event);
+        if (delta && onChunk) onChunk(delta);
+        continue;
+      }
+      if (msg.type === 'assistant' && msg.error) {
+        throw new AIClientError('AI_FAILED', `Claude reported an error: ${msg.error}`);
+      }
+      if (msg.type === 'result') {
+        if (msg.subtype === 'success') {
+          finalText = msg.result;
+          costUSD = msg.total_cost_usd;
+          durationMs = msg.duration_ms;
+        } else {
+          const detail = (msg as { errors?: string[] }).errors?.join('; ') ?? msg.subtype;
+          throw new AIClientError('AI_FAILED', `Claude chat failed: ${detail}`);
+        }
+      }
+    }
+
+    if (!finalText.trim()) {
+      throw new AIClientError('AI_FAILED', 'Claude returned an empty reply.');
+    }
+
+    return { reply: finalText, costUSD, durationMs };
   } catch (err) {
     if (err instanceof AIClientError) throw err;
     const msg = err instanceof Error ? err.message : String(err);

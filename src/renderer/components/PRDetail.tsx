@@ -8,9 +8,11 @@ import { ReviewBar } from './ReviewBar';
 import { MergeModal } from './MergeModal';
 import { CheckoutModal } from './CheckoutModal';
 import { ConflictsView } from './ConflictsView';
-import { EditorMenu } from './EditorMenu';
+import { PRActionsMenu } from './PRActionsMenu';
+import { Button } from './ui/button';
 import { AIReviewPanel } from './AIReviewPanel';
 import { FileTree } from './FileTree';
+import { FileTreeAside } from './FileTreeAside';
 import { DiffSearchBar, type DiffSearchBarHandle } from './DiffSearchBar';
 import { useDiffSearch, useScrollToMatch } from '../lib/diffSearch';
 import { ClickUpTaskTab } from './integrations/ClickUpTaskTab';
@@ -275,19 +277,13 @@ export function PRDetail({ repo, prNumber }: { repo: Repo | null; prNumber: numb
             </div>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
-            <button
-              className="btn"
-              onClick={() => api.shell.openExternal(pr.url)}
-              title="Open this PR on github.com"
-            >
-              Open on GitHub
-            </button>
-            <EditorMenu repoId={repo.id} />
-            <button className="btn" onClick={() => setCheckoutOpen(true)}>
-              Checkout locally
-            </button>
-            <button
-              className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
+            <PRActionsMenu
+              prUrl={pr.url}
+              repoId={repo.id}
+              onCheckout={() => setCheckoutOpen(true)}
+            />
+            <Button
+              variant="primary"
               disabled={pr.mergeable !== true}
               onClick={() => setMergeOpen(true)}
               title={
@@ -297,7 +293,7 @@ export function PRDetail({ repo, prNumber }: { repo: Repo | null; prNumber: numb
               }
             >
               Merge…
-            </button>
+            </Button>
           </div>
         </div>
         {/* Tabs */}
@@ -328,82 +324,87 @@ export function PRDetail({ repo, prNumber }: { repo: Repo | null; prNumber: numb
         </div>
       </div>
 
-      {/* Content */}
-      <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
-        {tab === 'files' && (
-          <div className="flex-1 min-h-0 flex">
-            <aside className="w-[260px] shrink-0 border-r border-border-muted bg-canvas-subtle/30 overflow-y-auto">
-              <FileTree
-                files={filesQ.data ?? []}
-                repoId={repo.id}
-                prNumber={pr.number}
-                headOid={pr.headRefOid}
-                filesWithMatches={search.filesWithMatches}
-                activeFilePath={activeMatch?.filePath}
-                viewingFilePath={visibleFilePath ?? undefined}
-                onSelectFile={onSelectFileFromTree}
-              />
-            </aside>
-            <div className="flex-1 min-w-0 flex flex-col">
-              {searchOpen && (
-                <DiffSearchBar
-                  ref={searchBarRef}
-                  query={search.query}
-                  onQueryChange={search.setQuery}
-                  current={search.current}
-                  total={search.total}
-                  onNext={search.next}
-                  onPrev={search.prev}
-                  onClose={() => {
-                    setSearchOpen(false);
-                    search.clear();
-                  }}
-                />
-              )}
-              <DiffViewer
-                ref={diffScrollRef}
-                loading={filesQ.isLoading}
-                error={filesQ.error as ApiError | null}
-                files={filesQ.data ?? []}
-                threads={commentsQ.data ?? []}
-                repoId={repo.id}
-                prNumber={pr.number}
-                headOid={pr.headRefOid}
-                lineMatchMap={search.lineMatchMap}
-                activeMatch={activeMatch}
-                filesWithMatches={search.filesWithMatches}
-              />
-            </div>
-            <AIReviewPanel
-              repoId={repo.id}
-              prNumber={pr.number}
-              headOid={pr.headRefOid}
-              onRequestCheckout={() => setCheckoutOpen(true)}
-              checkoutSuccessNonce={checkoutSuccessNonce}
-            />
+      {/* Content + always-visible AI panel */}
+      <div className="flex-1 min-h-0 overflow-hidden flex">
+        <div className="flex-1 min-w-0 flex flex-col min-h-0">
+          <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+            {tab === 'files' && (
+              <div className="flex-1 min-h-0 flex">
+                <FileTreeAside>
+                  <FileTree
+                    files={filesQ.data ?? []}
+                    repoId={repo.id}
+                    prNumber={pr.number}
+                    headOid={pr.headRefOid}
+                    filesWithMatches={search.filesWithMatches}
+                    activeFilePath={activeMatch?.filePath}
+                    viewingFilePath={visibleFilePath ?? undefined}
+                    onSelectFile={onSelectFileFromTree}
+                  />
+                </FileTreeAside>
+                <div className="flex-1 min-w-0 flex flex-col">
+                  {searchOpen && (
+                    <DiffSearchBar
+                      ref={searchBarRef}
+                      query={search.query}
+                      onQueryChange={search.setQuery}
+                      current={search.current}
+                      total={search.total}
+                      onNext={search.next}
+                      onPrev={search.prev}
+                      onClose={() => {
+                        setSearchOpen(false);
+                        search.clear();
+                      }}
+                    />
+                  )}
+                  <DiffViewer
+                    ref={diffScrollRef}
+                    loading={filesQ.isLoading}
+                    error={filesQ.error as ApiError | null}
+                    files={filesQ.data ?? []}
+                    threads={commentsQ.data ?? []}
+                    repoId={repo.id}
+                    prNumber={pr.number}
+                    headOid={pr.headRefOid}
+                    lineMatchMap={search.lineMatchMap}
+                    activeMatch={activeMatch}
+                    filesWithMatches={search.filesWithMatches}
+                  />
+                </div>
+              </div>
+            )}
+            {tab === 'conversation' && <Conversation pr={pr} comments={commentsQ.data ?? []} />}
+            {tab === 'commits' && <Commits commits={pr.commits} />}
+            {tab === 'conflicts' && (
+              <ConflictsView repo={repo} prNumber={pr.number} baseRefName={pr.baseRefName} />
+            )}
+            {tab === 'clickup-task' && clickupLinked && (
+              <ClickUpTaskTab task={clickupLinked.task} />
+            )}
+            {tab === 'clickup-comments' && clickupLinked && (
+              <ClickUpCommentsTab taskId={clickupLinked.task.id} />
+            )}
           </div>
-        )}
-        {tab === 'conversation' && <Conversation pr={pr} comments={commentsQ.data ?? []} />}
-        {tab === 'commits' && <Commits commits={pr.commits} />}
-        {tab === 'conflicts' && (
-          <ConflictsView repo={repo} prNumber={pr.number} baseRefName={pr.baseRefName} />
-        )}
-        {tab === 'clickup-task' && clickupLinked && (
-          <ClickUpTaskTab task={clickupLinked.task} />
-        )}
-        {tab === 'clickup-comments' && clickupLinked && (
-          <ClickUpCommentsTab taskId={clickupLinked.task.id} />
-        )}
-      </div>
 
-      {tab === 'files' && (
-        <ReviewBar
-          repo={repo}
-          prNumber={prNumber}
+          {tab === 'files' && (
+            <ReviewBar
+              repo={repo}
+              prNumber={prNumber}
+              headOid={pr.headRefOid}
+              onSubmitted={invalidatePR}
+            />
+          )}
+        </div>
+
+        <AIReviewPanel
+          repoId={repo.id}
+          prNumber={pr.number}
           headOid={pr.headRefOid}
-          onSubmitted={invalidatePR}
+          onRequestCheckout={() => setCheckoutOpen(true)}
+          checkoutSuccessNonce={checkoutSuccessNonce}
         />
-      )}
+      </div>
 
       {mergeOpen && (
         <MergeModal

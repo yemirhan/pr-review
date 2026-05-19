@@ -1,23 +1,23 @@
 import { useEffect, useRef, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { api, ApiError, qk, unwrap } from '../lib/api';
-import { useUI } from '../store/ui';
+import { useUI, AI_PANEL_WIDTH_MIN, AI_PANEL_WIDTH_MAX } from '../store/ui';
 import { DiffViewer } from './DiffViewer';
 import type {
   AIApplyPreflight,
   AIApplyProgress,
-  AIApplyResult
+  AIApplyResult,
+  AIChatMessage,
+  AIReviewMode
 } from '@shared/types';
 
 interface Props {
   repoId: string;
   prNumber: number;
   headOid: string;
-  /** Triggered when the panel wants the user to checkout the PR. */
   onRequestCheckout?: () => void;
-  /** Bumped each time a checkout succeeds; lets us auto-retry apply. */
   checkoutSuccessNonce?: number;
 }
 
@@ -32,6 +32,60 @@ type ApplyState =
   | { kind: 'pushed' }
   | { kind: 'error'; error: ApiError };
 
+type StreamState =
+  | null
+  | { kind: 'review'; streamId: string; text: string }
+  | { kind: 'chat'; streamId: string; text: string; pendingUser: string };
+
+interface Session {
+  id: string;
+  /** User-facing label. Updates to the mode label after first review. */
+  name: string;
+  mode: AIReviewMode;
+  includeClickUp: boolean;
+  review: { mode: AIReviewMode; text: string } | null;
+  chat: AIChatMessage[];
+  draftMsg: string;
+  stream: StreamState;
+  applyState: ApplyState;
+  error: ApiError | null;
+}
+
+interface ModeInfo {
+  key: AIReviewMode;
+  label: string;
+  blurb: string;
+}
+
+const MODES: ModeInfo[] = [
+  { key: 'critique', label: 'Critique', blurb: 'Concerns + suggestions' },
+  { key: 'summary', label: 'Summary', blurb: 'What changed, in plain English' },
+  { key: 'recap', label: 'Recap', blurb: 'What the author did' },
+  { key: 'risk', label: 'Risk', blurb: 'What could break' },
+  { key: 'tests', label: 'Tests', blurb: 'Coverage & gaps' }
+];
+
+const modeLabel = (m: AIReviewMode) => MODES.find((x) => x.key === m)?.label ?? m;
+
+function genId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function makeSession(label: string): Session {
+  return {
+    id: genId(),
+    name: label,
+    mode: 'critique',
+    includeClickUp: false,
+    review: null,
+    chat: [],
+    draftMsg: '',
+    stream: null,
+    applyState: { kind: 'idle' },
+    error: null
+  };
+}
+
 export function AIReviewPanel({
   repoId,
   prNumber,
@@ -41,16 +95,38 @@ export function AIReviewPanel({
 }: Props) {
   const collapsed = useUI((s) => s.aiPanelCollapsed);
   const toggle = useUI((s) => s.toggleAIPanel);
-  const qc = useQueryClient();
+  const width = useUI((s) => s.aiPanelWidth);
+  const setWidth = useUI((s) => s.setAIPanelWidth);
+  const [dragging, setDragging] = useState(false);
 
-  const [streamed, setStreamed] = useState('');
-  const streamedRef = useRef('');
+  function startResize(e: React.PointerEvent<HTMLDivElement>) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = width;
+    setDragging(true);
+    function onMove(ev: PointerEvent) {
+      // Panel is anchored to the right; dragging left grows it.
+      const next = startW + (startX - ev.clientX);
+      setWidth(next);
+    }
+    function onUp() {
+      setDragging(false);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    }
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }
 
-  const [applyState, setApplyState] = useState<ApplyState>({ kind: 'idle' });
-  const applyStateRef = useRef<ApplyState>(applyState);
+  const [sessions, setSessions] = useState<Session[]>(() => [makeSession('Chat 1')]);
+  const [activeId, setActiveId] = useState<string>(sessions[0].id);
+  const [nextChatNumber, setNextChatNumber] = useState(2);
+
+  // Ref mirror so async handlers see fresh state.
+  const sessionsRef = useRef(sessions);
   useEffect(() => {
-    applyStateRef.current = applyState;
-  }, [applyState]);
+    sessionsRef.current = sessions;
+  }, [sessions]);
 
   const authQ = useQuery({
     queryKey: qk.aiAuth,
@@ -58,121 +134,229 @@ export function AIReviewPanel({
     staleTime: 60_000
   });
 
-  const reviewM = useMutation({
-    mutationKey: qk.aiReview(repoId, prNumber),
-    mutationFn: async () => {
-      streamedRef.current = '';
-      setStreamed('');
-      return unwrap(api.ai.review(repoId, prNumber));
-    }
-  });
-
-  // Reset everything when switching PRs.
+  // Reset all sessions when switching PRs.
   useEffect(() => {
-    streamedRef.current = '';
-    setStreamed('');
-    setApplyState({ kind: 'idle' });
-    reviewM.reset();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const fresh = makeSession('Chat 1');
+    setSessions([fresh]);
+    setActiveId(fresh.id);
+    setNextChatNumber(2);
   }, [repoId, prNumber]);
 
-  // Stream review chunks.
+  // Route streaming chunks to whichever session is currently streaming with
+  // a matching streamId.
   useEffect(() => {
     const off = api.events.onAIReviewChunk((chunk) => {
       if (chunk.prNumber !== prNumber) return;
-      streamedRef.current += chunk.text;
-      setStreamed(streamedRef.current);
+      setSessions((cur) =>
+        cur.map((s) =>
+          s.stream && s.stream.streamId === chunk.streamId
+            ? { ...s, stream: { ...s.stream, text: s.stream.text + chunk.text } }
+            : s
+        )
+      );
     });
     return off;
   }, [prNumber]);
 
-  // Stream apply progress.
+  // Apply progress events route to whichever session is in 'applying' state.
   useEffect(() => {
     const off = api.events.onAIApplyProgress((event) => {
-      const cur = applyStateRef.current;
-      if (cur.kind !== 'applying') return;
-      // Ignore noisy text chunks during apply — final text comes back in the result.
       if (event.kind === 'text') return;
-      setApplyState({ kind: 'applying', events: [...cur.events, event] });
+      setSessions((cur) =>
+        cur.map((s) =>
+          s.applyState.kind === 'applying'
+            ? {
+                ...s,
+                applyState: {
+                  kind: 'applying',
+                  events: [...s.applyState.events, event]
+                }
+              }
+            : s
+        )
+      );
     });
     return off;
   }, []);
 
-  // When a checkout succeeds AND we were waiting for it, retry the apply
-  // preflight automatically. Skip the very first render (nonce=0).
-  useEffect(() => {
-    if (!checkoutSuccessNonce) return;
-    const cur = applyStateRef.current;
-    if (cur.kind !== 'wrong-branch') return;
-    const review = reviewM.data?.summary;
-    if (!review) return;
-    runApply(review);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [checkoutSuccessNonce]);
+  function updateSession(id: string, patch: Partial<Session> | ((s: Session) => Partial<Session>)) {
+    setSessions((cur) =>
+      cur.map((s) => (s.id === id ? { ...s, ...(typeof patch === 'function' ? patch(s) : patch) } : s))
+    );
+  }
 
-  async function runApply(review: string) {
-    setApplyState({ kind: 'preflighting' });
+  function addSession() {
+    const s = makeSession(`Chat ${nextChatNumber}`);
+    setNextChatNumber((n) => n + 1);
+    setSessions((cur) => [...cur, s]);
+    setActiveId(s.id);
+  }
+
+  function closeSession(id: string) {
+    setSessions((cur) => {
+      if (cur.length === 1) {
+        // Always keep at least one — reset it instead.
+        const fresh = makeSession('Chat 1');
+        setActiveId(fresh.id);
+        setNextChatNumber(2);
+        return [fresh];
+      }
+      const idx = cur.findIndex((s) => s.id === id);
+      const next = cur.filter((s) => s.id !== id);
+      if (id === activeId) {
+        const fallback = next[Math.min(idx, next.length - 1)];
+        setActiveId(fallback.id);
+      }
+      return next;
+    });
+  }
+
+  async function runReview(sessionId: string, chosenMode: AIReviewMode) {
+    const streamId = genId();
+    const session = sessionsRef.current.find((s) => s.id === sessionId);
+    if (!session) return;
+    updateSession(sessionId, {
+      stream: { kind: 'review', streamId, text: '' },
+      error: null
+    });
+    try {
+      const r = await unwrap(
+        api.ai.review(
+          repoId,
+          prNumber,
+          { mode: chosenMode, includeClickUpTask: session.includeClickUp },
+          streamId
+        )
+      );
+      updateSession(sessionId, (cur) => ({
+        review: { mode: chosenMode, text: r.summary },
+        mode: chosenMode,
+        // Rename the tab to the mode label on first review.
+        name: cur.review ? cur.name : modeLabel(chosenMode),
+        chat: [],
+        stream: null,
+        applyState: { kind: 'idle' }
+      }));
+    } catch (e) {
+      updateSession(sessionId, { error: e as ApiError, stream: null });
+    }
+  }
+
+  async function runChat(sessionId: string, message: string) {
+    const session = sessionsRef.current.find((s) => s.id === sessionId);
+    if (!session) return;
+    const streamId = genId();
+    const history = composeHistory(session.review, session.chat);
+    updateSession(sessionId, {
+      stream: { kind: 'chat', streamId, text: '', pendingUser: message },
+      error: null,
+      draftMsg: ''
+    });
+    try {
+      const r = await unwrap(
+        api.ai.chat(repoId, prNumber, {
+          history,
+          message,
+          includeClickUpTask: session.includeClickUp,
+          streamId
+        })
+      );
+      updateSession(sessionId, (cur) => ({
+        chat: [
+          ...cur.chat,
+          { role: 'user', content: message },
+          { role: 'assistant', content: r.reply }
+        ],
+        stream: null
+      }));
+    } catch (e) {
+      updateSession(sessionId, { error: e as ApiError, stream: null });
+    }
+  }
+
+  // ----- Apply suggestions (scoped to the active session's last review) -----
+
+  async function runApply(sessionId: string, reviewText: string) {
+    updateSession(sessionId, { applyState: { kind: 'preflighting' } });
     try {
       const pre = await unwrap(api.ai.applyPreflight(repoId, prNumber));
       if (!pre.branchMatches) {
-        setApplyState({ kind: 'wrong-branch', preflight: pre });
+        updateSession(sessionId, { applyState: { kind: 'wrong-branch', preflight: pre } });
         return;
       }
       if (pre.dirty) {
-        setApplyState({ kind: 'dirty' });
+        updateSession(sessionId, { applyState: { kind: 'dirty' } });
         return;
       }
-      setApplyState({ kind: 'applying', events: [] });
-      const result = await unwrap(api.ai.apply(repoId, prNumber, review));
-      setApplyState({
-        kind: 'applied',
-        result,
-        commitMessage: result.commitMessage
+      updateSession(sessionId, { applyState: { kind: 'applying', events: [] } });
+      const result = await unwrap(api.ai.apply(repoId, prNumber, reviewText));
+      updateSession(sessionId, {
+        applyState: { kind: 'applied', result, commitMessage: result.commitMessage }
       });
     } catch (e) {
-      setApplyState({ kind: 'error', error: e as ApiError });
+      updateSession(sessionId, { applyState: { kind: 'error', error: e as ApiError } });
     }
   }
 
-  async function runPush() {
-    if (applyState.kind !== 'applied') return;
-    const { result, commitMessage } = applyState;
-    setApplyState({ kind: 'pushing', result, commitMessage });
+  async function runPush(sessionId: string) {
+    const s = sessionsRef.current.find((x) => x.id === sessionId);
+    if (!s || s.applyState.kind !== 'applied') return;
+    const { result, commitMessage } = s.applyState;
+    updateSession(sessionId, { applyState: { kind: 'pushing', result, commitMessage } });
     try {
       await unwrap(api.ai.push(repoId, commitMessage));
-      setApplyState({ kind: 'pushed' });
-      qc.invalidateQueries({ queryKey: qk.prDetail(repoId, prNumber) });
-      qc.invalidateQueries({ queryKey: qk.prFiles(repoId, prNumber) });
-      qc.invalidateQueries({ queryKey: qk.prs(repoId) });
+      updateSession(sessionId, { applyState: { kind: 'pushed' } });
     } catch (e) {
-      setApplyState({ kind: 'error', error: e as ApiError });
+      updateSession(sessionId, { applyState: { kind: 'error', error: e as ApiError } });
     }
   }
 
-  async function runDiscard() {
-    if (applyState.kind !== 'applied') return;
-    const untracked = applyState.result.untrackedBefore;
+  async function runDiscard(sessionId: string) {
+    const s = sessionsRef.current.find((x) => x.id === sessionId);
+    if (!s || s.applyState.kind !== 'applied') return;
     try {
-      await unwrap(api.ai.discard(repoId, untracked));
-      setApplyState({ kind: 'idle' });
+      await unwrap(api.ai.discard(repoId, s.applyState.result.untrackedBefore));
+      updateSession(sessionId, { applyState: { kind: 'idle' } });
     } catch (e) {
-      setApplyState({ kind: 'error', error: e as ApiError });
+      updateSession(sessionId, { applyState: { kind: 'error', error: e as ApiError } });
     }
   }
+
+  // Auto-retry apply after a successful checkout, if any session is waiting.
+  useEffect(() => {
+    if (!checkoutSuccessNonce) return;
+    const waiter = sessionsRef.current.find(
+      (s) => s.applyState.kind === 'wrong-branch' && s.review
+    );
+    if (waiter) runApply(waiter.id, waiter.review!.text);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checkoutSuccessNonce]);
 
   if (collapsed) return null;
 
-  const finalSummary = reviewM.data?.summary ?? '';
-  const showStreaming = reviewM.isPending && streamed.length > 0;
-  const showError = !!reviewM.error;
-  const apiError = reviewM.error as ApiError | undefined;
+  const active = sessions.find((s) => s.id === activeId) ?? sessions[0];
   const authBlocked = authQ.data?.available === false;
-  const hasApply = applyState.kind !== 'idle';
 
   return (
     <aside
-      className={`${hasApply ? 'w-[580px]' : 'w-[360px]'} shrink-0 border-l border-border-muted bg-canvas-subtle/30 flex flex-col min-h-0 transition-[width] duration-200 ease-smooth`}
+      className="relative shrink-0 border-l border-border-muted bg-canvas-subtle/30 flex flex-col min-h-0"
+      style={{ width: `${width}px` }}
     >
+      <div
+        onPointerDown={startResize}
+        className={`absolute left-0 top-0 bottom-0 w-1.5 -translate-x-1/2 cursor-col-resize z-10 group ${
+          dragging ? '' : ''
+        }`}
+        title={`Drag to resize (${AI_PANEL_WIDTH_MIN}–${AI_PANEL_WIDTH_MAX}px)`}
+        role="separator"
+        aria-orientation="vertical"
+      >
+        <div
+          className={`absolute inset-y-0 left-1/2 -translate-x-1/2 w-px transition-colors ${
+            dragging ? 'bg-accent w-0.5' : 'bg-transparent group-hover:bg-accent/60'
+          }`}
+        />
+      </div>
       <div className="flex items-center justify-between px-3 h-9 border-b border-border-muted shrink-0">
         <div className="flex items-center gap-2 text-2xs uppercase tracking-wide text-fg-subtle">
           <span>AI review</span>
@@ -187,77 +371,383 @@ export function AIReviewPanel({
             </span>
           )}
         </div>
-        <button
-          onClick={toggle}
-          className="text-2xs text-fg-subtle hover:text-fg"
-          title="Hide panel"
-        >
+        <button onClick={toggle} className="text-2xs text-fg-subtle hover:text-fg" title="Hide panel">
           ‹
         </button>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3">
-        {authBlocked ? (
+      <SessionTabs
+        sessions={sessions}
+        activeId={active.id}
+        onSelect={setActiveId}
+        onClose={closeSession}
+        onAdd={addSession}
+      />
+
+      {authBlocked ? (
+        <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3">
           <AuthMissing />
-        ) : reviewM.isPending && streamed.length === 0 ? (
-          <Status text="Asking Claude…" />
-        ) : showStreaming ? (
-          <Markdown text={streamed} streaming />
-        ) : reviewM.isSuccess ? (
-          <>
-            <Markdown text={finalSummary} />
-            <ApplyArea
-              applyState={applyState}
-              repoId={repoId}
-              prNumber={prNumber}
-              headOid={headOid}
-              onRun={() => runApply(finalSummary)}
-              onPush={runPush}
-              onDiscard={runDiscard}
-              onCheckoutRequest={onRequestCheckout}
-              onCommitMessageChange={(msg) => {
-                if (applyState.kind === 'applied')
-                  setApplyState({ ...applyState, commitMessage: msg });
+        </div>
+      ) : (
+        <SessionPane
+          key={active.id}
+          session={active}
+          repoId={repoId}
+          prNumber={prNumber}
+          headOid={headOid}
+          onRunReview={(m) => runReview(active.id, m)}
+          onRunChat={(msg) => runChat(active.id, msg)}
+          onPatch={(p) => updateSession(active.id, p)}
+          onRunApply={() => active.review && runApply(active.id, active.review.text)}
+          onPushApply={() => runPush(active.id)}
+          onDiscardApply={() => runDiscard(active.id)}
+          onResetApply={() => updateSession(active.id, { applyState: { kind: 'idle' } })}
+          onCheckoutRequest={onRequestCheckout}
+        />
+      )}
+    </aside>
+  );
+}
+
+function composeHistory(
+  review: { mode: AIReviewMode; text: string } | null,
+  chat: AIChatMessage[]
+): AIChatMessage[] {
+  const history: AIChatMessage[] = [];
+  if (review) {
+    history.push({
+      role: 'assistant',
+      content: `Initial ${review.mode} review:\n\n${review.text}`
+    });
+  }
+  history.push(...chat);
+  return history;
+}
+
+// -- Session tabs ----------------------------------------------------------
+
+function SessionTabs({
+  sessions,
+  activeId,
+  onSelect,
+  onClose,
+  onAdd
+}: {
+  sessions: Session[];
+  activeId: string;
+  onSelect: (id: string) => void;
+  onClose: (id: string) => void;
+  onAdd: () => void;
+}) {
+  return (
+    <div className="flex items-stretch border-b border-border-muted bg-canvas-inset/30 shrink-0 min-h-[30px] overflow-x-auto">
+      {sessions.map((s) => {
+        const active = s.id === activeId;
+        const busy = !!s.stream;
+        return (
+          <div
+            key={s.id}
+            className={`group flex items-center gap-1.5 pl-2.5 pr-1 border-r border-border-muted text-2xs cursor-pointer select-none max-w-[140px] ${
+              active
+                ? 'bg-canvas text-fg'
+                : 'text-fg-muted hover:text-fg hover:bg-canvas-inset/50'
+            }`}
+            onClick={() => onSelect(s.id)}
+            title={s.name}
+          >
+            {busy && (
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent animate-pulse shrink-0" />
+            )}
+            <span className="truncate">{s.name}</span>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onClose(s.id);
               }}
-              onReset={() => setApplyState({ kind: 'idle' })}
+              className="opacity-0 group-hover:opacity-100 hover:bg-canvas-overlay rounded w-4 h-4 flex items-center justify-center text-fg-subtle hover:text-fg shrink-0"
+              title="Close chat"
+            >
+              ×
+            </button>
+          </div>
+        );
+      })}
+      <button
+        onClick={onAdd}
+        className="px-2 text-fg-subtle hover:text-fg hover:bg-canvas-inset/50 text-sm shrink-0"
+        title="New chat"
+      >
+        +
+      </button>
+    </div>
+  );
+}
+
+// -- Per-session pane ------------------------------------------------------
+
+function SessionPane({
+  session,
+  repoId,
+  prNumber,
+  headOid,
+  onRunReview,
+  onRunChat,
+  onPatch,
+  onRunApply,
+  onPushApply,
+  onDiscardApply,
+  onResetApply,
+  onCheckoutRequest
+}: {
+  session: Session;
+  repoId: string;
+  prNumber: number;
+  headOid: string;
+  onRunReview: (m: AIReviewMode) => void;
+  onRunChat: (msg: string) => void;
+  onPatch: (p: Partial<Session>) => void;
+  onRunApply: () => void;
+  onPushApply: () => void;
+  onDiscardApply: () => void;
+  onResetApply: () => void;
+  onCheckoutRequest?: () => void;
+}) {
+  const busy = !!session.stream;
+  const reviewing = session.stream?.kind === 'review';
+  const chatting = session.stream?.kind === 'chat';
+
+  return (
+    <>
+      <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-4">
+        <ModeBar
+          mode={session.mode}
+          onChange={(m) => onPatch({ mode: m })}
+          disabled={busy}
+          includeClickUp={session.includeClickUp}
+          onToggleClickUp={() => onPatch({ includeClickUp: !session.includeClickUp })}
+          onRun={() => onRunReview(session.mode)}
+          busy={busy}
+          hasReview={!!session.review}
+        />
+
+        {reviewing && (
+          <Markdown
+            text={session.stream?.text ?? ''}
+            streaming
+            emptyPlaceholder="Asking Claude…"
+          />
+        )}
+
+        {!reviewing && session.review && (
+          <>
+            <Markdown text={session.review.text} />
+            {session.review.mode === 'critique' && (
+              <ApplyArea
+                applyState={session.applyState}
+                repoId={repoId}
+                prNumber={prNumber}
+                headOid={headOid}
+                onRun={onRunApply}
+                onPush={onPushApply}
+                onDiscard={onDiscardApply}
+                onCheckoutRequest={onCheckoutRequest}
+                onCommitMessageChange={(msg) => {
+                  if (session.applyState.kind === 'applied')
+                    onPatch({ applyState: { ...session.applyState, commitMessage: msg } });
+                }}
+                onReset={onResetApply}
+              />
+            )}
+
+            <ChatThread
+              messages={session.chat}
+              streaming={
+                chatting && session.stream?.kind === 'chat'
+                  ? { text: session.stream.text, pendingUser: session.stream.pendingUser }
+                  : null
+              }
             />
           </>
-        ) : showError ? (
-          <ErrorBox error={apiError!} />
-        ) : (
-          <Idle />
         )}
+
+        {!reviewing && !session.review && !session.error && <Idle />}
+
+        {session.error && <ErrorBox error={session.error} />}
       </div>
 
-      <div className="border-t border-border-muted p-3 shrink-0 flex items-center gap-2">
+      {session.review && (
+        <div className="border-t border-border-muted p-3 shrink-0">
+          <ChatComposer
+            value={session.draftMsg}
+            onChange={(v) => onPatch({ draftMsg: v })}
+            disabled={busy}
+            onSend={() => {
+              const msg = session.draftMsg.trim();
+              if (!msg) return;
+              onRunChat(msg);
+            }}
+          />
+        </div>
+      )}
+    </>
+  );
+}
+
+function ModeBar({
+  mode,
+  onChange,
+  onRun,
+  busy,
+  hasReview,
+  includeClickUp,
+  onToggleClickUp,
+  disabled
+}: {
+  mode: AIReviewMode;
+  onChange: (m: AIReviewMode) => void;
+  onRun: () => void;
+  busy: boolean;
+  hasReview: boolean;
+  includeClickUp: boolean;
+  onToggleClickUp: () => void;
+  disabled: boolean;
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="text-2xs uppercase tracking-wide text-fg-subtle">Mode</div>
+      <div className="grid grid-cols-2 gap-1.5">
+        {MODES.map((m) => {
+          const active = m.key === mode;
+          return (
+            <button
+              key={m.key}
+              onClick={() => onChange(m.key)}
+              disabled={disabled}
+              className={`text-left px-2.5 py-1.5 rounded-md border text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                active
+                  ? 'border-accent bg-accent-subtle/40 text-fg'
+                  : 'border-border-muted text-fg-muted hover:text-fg hover:border-border'
+              }`}
+              title={m.blurb}
+            >
+              <div className="font-medium">{m.label}</div>
+              <div className="text-2xs text-fg-subtle truncate">{m.blurb}</div>
+            </button>
+          );
+        })}
+      </div>
+      <label className="flex items-center gap-2 text-2xs text-fg-muted cursor-pointer select-none">
+        <input
+          type="checkbox"
+          checked={includeClickUp}
+          onChange={onToggleClickUp}
+          disabled={disabled}
+          className="accent-accent"
+        />
+        Include linked ClickUp task as context
+      </label>
+      <button
+        className="btn-primary w-full disabled:opacity-50 disabled:cursor-not-allowed"
+        onClick={onRun}
+        disabled={busy}
+      >
+        {busy ? 'Running…' : hasReview ? `Re-run ${modeLabel(mode)}` : `Run ${modeLabel(mode)}`}
+      </button>
+    </div>
+  );
+}
+
+function ChatThread({
+  messages,
+  streaming
+}: {
+  messages: AIChatMessage[];
+  streaming: { text: string; pendingUser: string } | null;
+}) {
+  if (messages.length === 0 && !streaming) return null;
+  return (
+    <div className="border-t border-border-muted pt-3 space-y-3">
+      <div className="text-2xs uppercase tracking-wide text-fg-subtle">Chat</div>
+      {messages.map((m, i) => (
+        <ChatBubble key={i} role={m.role} content={m.content} />
+      ))}
+      {streaming && (
+        <>
+          <ChatBubble role="user" content={streaming.pendingUser} />
+          <ChatBubble role="assistant" content={streaming.text} streaming />
+        </>
+      )}
+    </div>
+  );
+}
+
+function ChatBubble({
+  role,
+  content,
+  streaming
+}: {
+  role: 'user' | 'assistant';
+  content: string;
+  streaming?: boolean;
+}) {
+  if (role === 'user') {
+    return (
+      <div className="rounded-md bg-accent-subtle/30 border border-accent/30 px-3 py-2">
+        <div className="text-2xs uppercase tracking-wide text-accent mb-1">You</div>
+        <div className="whitespace-pre-wrap text-sm text-fg">{content}</div>
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-md bg-canvas/40 border border-border-muted px-3 py-2">
+      <div className="text-2xs uppercase tracking-wide text-fg-subtle mb-1">Claude</div>
+      <Markdown
+        text={content}
+        streaming={streaming}
+        emptyPlaceholder={streaming ? 'Thinking…' : undefined}
+      />
+    </div>
+  );
+}
+
+function ChatComposer({
+  value,
+  onChange,
+  onSend,
+  disabled
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  onSend: () => void;
+  disabled: boolean;
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+            e.preventDefault();
+            if (!disabled) onSend();
+          }
+        }}
+        placeholder="Ask Claude about this PR…"
+        rows={2}
+        disabled={disabled}
+        className="w-full bg-canvas border border-border-muted rounded-md px-2 py-1.5 text-sm text-fg outline-none focus:border-accent resize-y min-h-[3rem] disabled:opacity-60"
+      />
+      <div className="flex items-center justify-between">
+        <span className="text-2xs text-fg-subtle">⌘+Enter to send</span>
         <button
           className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
-          onClick={() => reviewM.mutate()}
-          disabled={reviewM.isPending || authBlocked}
+          onClick={onSend}
+          disabled={disabled || !value.trim()}
         >
-          {reviewM.isPending
-            ? 'Reviewing…'
-            : reviewM.isSuccess || showError
-              ? 'Re-run AI review'
-              : 'Run AI review'}
+          Send
         </button>
-        {reviewM.data?.costUSD != null && reviewM.data.costUSD > 0 && (
-          <span
-            className="text-2xs text-fg-subtle"
-            title={
-              authQ.data?.source === 'claude-code'
-                ? 'API-equivalent value of tokens used. Covered by your Claude subscription — not billed.'
-                : 'Billed via ANTHROPIC_API_KEY.'
-            }
-          >
-            {authQ.data?.source === 'claude-code' ? '≈ ' : ''}${reviewM.data.costUSD.toFixed(4)}
-            {authQ.data?.source === 'claude-code' && (
-              <span className="ml-1 text-fg-subtle/70">API-eq.</span>
-            )}
-          </span>
-        )}
       </div>
-    </aside>
+    </div>
   );
 }
 
@@ -304,9 +794,7 @@ function ApplyArea({
         </>
       )}
 
-      {applyState.kind === 'preflighting' && (
-        <Status text="Checking working tree…" />
-      )}
+      {applyState.kind === 'preflighting' && <Status text="Checking working tree…" />}
 
       {applyState.kind === 'wrong-branch' && (
         <div className="text-sm text-fg-muted leading-relaxed space-y-2">
@@ -436,12 +924,13 @@ function Idle() {
   return (
     <div className="text-sm text-fg-muted leading-relaxed">
       <p>
-        Run an on-demand review of this PR with Claude. The model is sent the
-        diff and PR description; it has no tool access and cannot read other
-        files.
+        Pick a mode above and click Run. Claude is sent the diff and PR
+        description (and optionally the linked ClickUp task) — it has no tool
+        access and cannot read other files.
       </p>
       <p className="mt-2 text-2xs text-fg-subtle">
-        Returns a markdown summary with Overview · Concerns · Suggestions.
+        After the review, ask follow-up questions in the chat below. Open more
+        chats with the + tab.
       </p>
     </div>
   );
@@ -464,9 +953,9 @@ function AuthMissing() {
       </div>
       <p>Claude is not authenticated on this machine.</p>
       <p className="mt-2">
-        Either sign in with <code className="font-mono text-fg">claude</code> on
-        the command line, or set <code className="font-mono text-fg">ANTHROPIC_API_KEY</code> in
-        your shell before launching the app.
+        Either sign in with <code className="font-mono text-fg">claude</code> on the command
+        line, or set <code className="font-mono text-fg">ANTHROPIC_API_KEY</code> in your shell
+        before launching the app.
       </p>
     </div>
   );
@@ -481,7 +970,18 @@ function ErrorBox({ error }: { error: ApiError }) {
   );
 }
 
-function Markdown({ text, streaming }: { text: string; streaming?: boolean }) {
+function Markdown({
+  text,
+  streaming,
+  emptyPlaceholder
+}: {
+  text: string;
+  streaming?: boolean;
+  emptyPlaceholder?: string;
+}) {
+  if (!text && emptyPlaceholder) {
+    return <Status text={emptyPlaceholder} />;
+  }
   return (
     <div className="ai-md text-sm text-fg leading-relaxed">
       <ReactMarkdown
@@ -497,11 +997,17 @@ function Markdown({ text, streaming }: { text: string; streaming?: boolean }) {
           code: ({ className, children, ...rest }) => {
             const isBlock = /language-/.test(className ?? '');
             return isBlock ? (
-              <code className="block bg-canvas-overlay border border-border-muted rounded px-2 py-1.5 text-2xs font-mono overflow-x-auto whitespace-pre" {...rest}>
+              <code
+                className="block bg-canvas-overlay border border-border-muted rounded px-2 py-1.5 text-2xs font-mono overflow-x-auto whitespace-pre"
+                {...rest}
+              >
                 {children}
               </code>
             ) : (
-              <code className="font-mono text-2xs bg-canvas-overlay px-1 py-0.5 rounded text-fg" {...rest}>
+              <code
+                className="font-mono text-2xs bg-canvas-overlay px-1 py-0.5 rounded text-fg"
+                {...rest}
+              >
                 {children}
               </code>
             );

@@ -3,7 +3,6 @@ import { useState } from 'react';
 import { api, qk, unwrap, ApiError } from '../lib/api';
 import { useUI } from '../store/ui';
 import { tileColor, tileLetter } from '../lib/colorFromId';
-import { ThemeToggle } from './ThemeToggle';
 import type { Repo } from '@shared/types';
 
 export function SidebarRail({ repos }: { repos: Repo[] }) {
@@ -46,7 +45,7 @@ export function SidebarRail({ repos }: { repos: Repo[] }) {
       >
         <ChevronRight />
       </button>
-      <div className="flex-1 overflow-y-auto py-2 px-1.5 space-y-1.5">
+      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden py-3 px-1.5 space-y-2">
         {repos.map((r, i) => {
           const c = counts[i];
           const count = c.data?.length ?? 0;
@@ -86,9 +85,6 @@ export function SidebarRail({ repos }: { repos: Repo[] }) {
         >
           {adding ? '…' : '+'}
         </button>
-      </div>
-      <div className="p-1.5 border-t border-border-muted flex justify-center">
-        <ThemeToggle />
       </div>
     </aside>
   );

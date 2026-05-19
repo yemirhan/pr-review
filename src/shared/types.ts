@@ -171,6 +171,14 @@ export interface ReviewDraft {
 
 export type MergeStrategy = 'merge' | 'squash' | 'rebase';
 
+export interface CreatePRInput {
+  base: string;
+  head: string;
+  title: string;
+  body: string;
+  draft: boolean;
+}
+
 export interface CheckoutProgress {
   channel: 'stdout' | 'stderr' | 'done' | 'error';
   data: string;
@@ -326,8 +334,16 @@ export interface AIAuthStatus {
   source: AIAuthSource;
 }
 
+export type AIReviewMode = 'critique' | 'summary' | 'recap' | 'risk' | 'tests';
+
+export interface AIReviewOptions {
+  mode: AIReviewMode;
+  includeClickUpTask?: boolean;
+}
+
 export interface AIReviewResult {
   summary: string;
+  mode: AIReviewMode;
   /** Reported by SDK; may be 0 when using subscription auth. */
   costUSD?: number;
   durationMs?: number;
@@ -335,8 +351,29 @@ export interface AIReviewResult {
 
 export interface AIReviewChunk {
   prNumber: number;
+  /** Identifies which streaming exchange this chunk belongs to. */
+  streamId: string;
   /** Incremental text appended since the last chunk. */
   text: string;
+}
+
+export interface AIChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface AIChatRequest {
+  history: AIChatMessage[];
+  message: string;
+  includeClickUpTask?: boolean;
+  /** Echoed back on stream chunks so the renderer can route them. */
+  streamId: string;
+}
+
+export interface AIChatResult {
+  reply: string;
+  costUSD?: number;
+  durationMs?: number;
 }
 
 export interface AIApplyPreflight {
@@ -355,4 +392,17 @@ export interface AIApplyResult {
   assistantText: string;
   /** Snapshot of untracked files captured before apply; used to scope discards. */
   untrackedBefore: string[];
+}
+
+export type SystemToolId = 'gh' | 'claude';
+
+export interface SystemTool {
+  id: SystemToolId;
+  label: string;
+  description: string;
+  installed: boolean;
+  path?: string;
+  version?: string;
+  installUrl: string;
+  installCommand: string;
 }
