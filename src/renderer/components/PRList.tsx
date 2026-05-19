@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, qk, unwrap, ApiError } from '../lib/api';
 import { useUI } from '../store/ui';
-import type { Repo, PRSummary } from '@shared/types';
+import type { Repo, PRSummary, PRListState } from '@shared/types';
 import { relativeTime } from '../lib/format';
 import { ChecksPill } from './ChecksPill';
 import { useMemo, useState, useEffect } from 'react';
@@ -16,6 +16,7 @@ export function PRList({ repo }: { repo: Repo | null }) {
   const [query, setQuery] = useState('');
   const [debounced, setDebounced] = useState('');
   const [filter, setFilter] = useState<FilterMode>('all');
+  const [state, setState] = useState<PRListState>('open');
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(query), 150);
@@ -23,8 +24,9 @@ export function PRList({ repo }: { repo: Repo | null }) {
   }, [query]);
 
   const prsQ = useQuery({
-    queryKey: repo ? qk.prs(repo.id) : ['no-repo'],
-    queryFn: () => (repo ? unwrap(api.prs.list(repo.id)) : Promise.resolve([] as PRSummary[])),
+    queryKey: repo ? qk.prs(repo.id, state) : ['no-repo'],
+    queryFn: () =>
+      repo ? unwrap(api.prs.list(repo.id, state)) : Promise.resolve([] as PRSummary[]),
     enabled: !!repo
   });
 
@@ -40,16 +42,20 @@ export function PRList({ repo }: { repo: Repo | null }) {
     const data = prsQ.data ?? [];
     const q = debounced.trim().toLowerCase();
     return data.filter((pr) => {
-      if (filter === 'draft' && !pr.isDraft) return false;
-      if (filter === 'ready' && pr.isDraft) return false;
+      if (state === 'open') {
+        if (filter === 'draft' && !pr.isDraft) return false;
+        if (filter === 'ready' && pr.isDraft) return false;
+      }
       if (!q) return true;
       return (
         pr.title.toLowerCase().includes(q) ||
         String(pr.number).includes(q) ||
-        pr.author.login.toLowerCase().includes(q)
+        pr.author.login.toLowerCase().includes(q) ||
+        pr.headRefName.toLowerCase().includes(q) ||
+        pr.baseRefName.toLowerCase().includes(q)
       );
     });
-  }, [prsQ.data, debounced, filter]);
+  }, [prsQ.data, debounced, filter, state]);
 
   if (!repo) {
     return (
@@ -66,38 +72,58 @@ export function PRList({ repo }: { repo: Repo | null }) {
           <div className="text-sm font-semibold">
             {repo.label}{' '}
             <span className="text-fg-subtle font-normal">
-              · {prsQ.data?.length ?? 0} open
+              · {prsQ.data?.length ?? 0} {state}
             </span>
           </div>
           <button
             className="btn-ghost"
-            onClick={() => qc.invalidateQueries({ queryKey: qk.prs(repo.id) })}
+            onClick={() => qc.invalidateQueries({ queryKey: qk.prs(repo.id, state) })}
             title="Refresh"
           >
             ↻
           </button>
         </div>
-        <input
-          className="input w-full"
-          placeholder="Search PRs…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        <div className="flex gap-1 mt-2">
-          {(['all', 'ready', 'draft'] as FilterMode[]).map((f) => (
+        <div className="flex gap-1 mb-2">
+          {(['open', 'merged', 'closed'] as PRListState[]).map((s) => (
             <button
-              key={f}
-              onClick={() => setFilter(f)}
-              className={`text-2xs px-2 h-5 rounded-full border transition-colors ${
-                filter === f
+              key={s}
+              onClick={() => {
+                setState(s);
+                selectPR(null);
+              }}
+              className={`text-2xs px-2.5 h-6 rounded-md border transition-colors capitalize ${
+                state === s
                   ? 'bg-accent-subtle text-accent border-accent/40'
                   : 'bg-canvas-subtle border-border-muted text-fg-muted hover:text-fg'
               }`}
             >
-              {f === 'all' ? 'All' : f === 'ready' ? 'Ready' : 'Drafts'}
+              {s}
             </button>
           ))}
         </div>
+        <input
+          className="input w-full"
+          placeholder="Search title, #, author, branch…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        {state === 'open' && (
+          <div className="flex gap-1 mt-2">
+            {(['all', 'ready', 'draft'] as FilterMode[]).map((f) => (
+              <button
+                key={f}
+                onClick={() => setFilter(f)}
+                className={`text-2xs px-2 h-5 rounded-full border transition-colors ${
+                  filter === f
+                    ? 'bg-accent-subtle text-accent border-accent/40'
+                    : 'bg-canvas-subtle border-border-muted text-fg-muted hover:text-fg'
+                }`}
+              >
+                {f === 'all' ? 'All' : f === 'ready' ? 'Ready' : 'Drafts'}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       <div className="flex-1 overflow-y-auto">
         {prsQ.isLoading && (
@@ -109,7 +135,7 @@ export function PRList({ repo }: { repo: Repo | null }) {
           </div>
         )}
         {!prsQ.isLoading && filtered.length === 0 && (
-          <div className="p-6 text-center text-sm text-fg-subtle">No open PRs</div>
+          <div className="p-6 text-center text-sm text-fg-subtle">No {state} PRs</div>
         )}
         {filtered.map((pr) => (
           <PRRow
@@ -144,13 +170,28 @@ function PRRow({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5 mb-0.5">
             {pr.isDraft && <span className="chip">Draft</span>}
+            {pr.state === 'MERGED' && (
+              <span className="chip border-accent/40 text-accent">Merged</span>
+            )}
+            {pr.state === 'CLOSED' && (
+              <span className="chip border-danger/40 text-danger">Closed</span>
+            )}
             <span className="text-2xs text-fg-subtle">#{pr.number}</span>
             <span className="text-2xs text-fg-subtle">·</span>
             <span className="text-2xs text-fg-muted truncate">@{pr.author.login}</span>
           </div>
           <div className="text-sm text-fg leading-snug line-clamp-2 mb-1">{pr.title}</div>
+          <div className="text-2xs text-fg-subtle font-mono truncate mb-1" title={`${pr.headRefName} → ${pr.baseRefName}`}>
+            {pr.headRefName}
+          </div>
           <div className="flex items-center gap-2 text-2xs text-fg-subtle">
-            <span>{relativeTime(pr.updatedAt)}</span>
+            <span>
+              {pr.state === 'MERGED' && pr.mergedAt
+                ? `merged ${relativeTime(pr.mergedAt)}`
+                : pr.state === 'CLOSED' && pr.closedAt
+                  ? `closed ${relativeTime(pr.closedAt)}`
+                  : relativeTime(pr.updatedAt)}
+            </span>
             <span>·</span>
             <span className="text-success">+{pr.additions}</span>
             <span className="text-danger">−{pr.deletions}</span>
@@ -161,7 +202,7 @@ function PRRow({
           </div>
         </div>
         <div className="flex flex-col items-end gap-1 shrink-0">
-          <ChecksPill checks={pr.checks} compact />
+          {pr.state === 'OPEN' && <ChecksPill checks={pr.checks} compact />}
           <ReviewDecisionPill decision={pr.reviewDecision} />
         </div>
       </div>

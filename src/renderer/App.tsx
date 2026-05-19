@@ -5,6 +5,7 @@ import { PRList } from './components/PRList';
 import { PRDetail } from './components/PRDetail';
 import { Empty } from './pages/Empty';
 import { TitleBar } from './components/TitleBar';
+import { SettingsModal } from './components/SettingsModal';
 import { api, qk, unwrap } from './lib/api';
 import { useUI } from './store/ui';
 import { useTheme } from './lib/theme';
@@ -44,6 +45,7 @@ export function App() {
           </>
         )}
       </div>
+      <SettingsModal />
     </div>
   );
 }

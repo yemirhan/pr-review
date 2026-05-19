@@ -16,7 +16,14 @@ import type {
   AIReviewResult,
   AIApplyPreflight,
   AIApplyProgress,
-  AIApplyResult
+  AIApplyResult,
+  ClickUpConfig,
+  ClickUpRepoConfig,
+  ClickUpLookupResult,
+  ClickUpComment,
+  ClickUpAuthResult,
+  ClickUpStatus,
+  PRListState
 } from '@shared/types';
 
 export type Result<T> = { ok: true; data: T } | { ok: false; error: GhError };
@@ -32,13 +39,16 @@ const api = {
     remove: (id: string) => call<void>('repos:remove', id)
   },
   prs: {
-    list: (repoId: string) => call<PRSummary[]>('prs:list', repoId),
+    list: (repoId: string, state?: PRListState) =>
+      call<PRSummary[]>('prs:list', repoId, state),
     get: (repoId: string, num: number) => call<PRDetail>('prs:get', repoId, num),
     files: (repoId: string, num: number) => call<FileDiff[]>('prs:files', repoId, num),
     comments: (repoId: string, num: number) =>
       call<InlineCommentThread[]>('prs:comments', repoId, num),
     conflicts: (repoId: string, num: number, baseRefName: string) =>
-      call<ConflictInfo>('prs:conflicts', repoId, num, baseRefName)
+      call<ConflictInfo>('prs:conflicts', repoId, num, baseRefName),
+    editTitle: (repoId: string, num: number, title: string) =>
+      call<void>('prs:editTitle', repoId, num, title)
   },
   editors: {
     list: () => call<Editor[]>('editors:list'),
@@ -91,6 +101,27 @@ const api = {
   },
   shell: {
     openExternal: (url: string) => call<void>('shell:openExternal', url)
+  },
+  integrations: {
+    clickup: {
+      getConfig: () => call<ClickUpConfig>('clickup:config:get'),
+      setToken: (token: string | null) => call<void>('clickup:config:setToken', token),
+      setTeam: (teamId: string | null) => call<void>('clickup:config:setTeam', teamId),
+      listTeams: () => call<{ id: string; name: string }[]>('clickup:teams:list'),
+      setRepoConfig: (repoId: string, cfg: ClickUpRepoConfig) =>
+        call<void>('clickup:config:setRepo', repoId, cfg),
+      testAuth: (tokenOverride?: string) =>
+        call<ClickUpAuthResult>('clickup:auth:test', tokenOverride),
+      getListStatuses: (listId: string) =>
+        call<{ id: string; name: string; statuses: ClickUpStatus[] }>(
+          'clickup:lists:statuses',
+          listId
+        ),
+      taskByBranch: (repoId: string, branch: string) =>
+        call<ClickUpLookupResult>('clickup:task:byBranch', repoId, branch),
+      taskComments: (taskId: string) =>
+        call<ClickUpComment[]>('clickup:task:comments', taskId)
+    }
   }
 };
 

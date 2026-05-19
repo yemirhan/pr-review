@@ -23,12 +23,17 @@ export const api = window.api;
 
 export const qk = {
   repos: ['repos'] as const,
-  prs: (repoId: string) => ['prs', repoId] as const,
+  prs: (repoId: string, state: string = 'open') => ['prs', repoId, state] as const,
   prDetail: (repoId: string, num: number) => ['pr', repoId, num] as const,
   prFiles: (repoId: string, num: number) => ['pr-files', repoId, num] as const,
   prComments: (repoId: string, num: number) => ['pr-comments', repoId, num] as const,
   prConflicts: (repoId: string, num: number) => ['pr-conflicts', repoId, num] as const,
   aiReview: (repoId: string, num: number) => ['ai-review', repoId, num] as const,
   aiAuth: ['ai-auth'] as const,
-  editors: ['editors'] as const
+  editors: ['editors'] as const,
+  clickupConfig: ['clickup', 'config'] as const,
+  clickupTaskByBranch: (repoId: string, branch: string) =>
+    ['clickup', 'task', repoId, branch] as const,
+  clickupComments: (taskId: string) => ['clickup', 'comments', taskId] as const,
+  clickupListStatuses: (listId: string) => ['clickup', 'list', listId] as const
 };

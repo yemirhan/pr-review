@@ -73,6 +73,7 @@ interface UIState {
   sidebarCollapsed: boolean;
   aiPanelCollapsed: boolean;
   viewed: Record<string, boolean>;
+  settingsOpen: boolean;
 
   selectRepo(id: string | null): void;
   selectPR(num: number | null): void;
@@ -84,6 +85,7 @@ interface UIState {
   setAIPanelCollapsed(collapsed: boolean): void;
   toggleAIPanel(): void;
   setViewed(key: string, viewed: boolean): void;
+  setSettingsOpen(open: boolean): void;
 
   draftKey(): string | null;
   getDraft(): DraftState;
@@ -109,6 +111,7 @@ export const useUI = create<UIState>((set, get) => ({
   sidebarCollapsed: readCollapsed(),
   aiPanelCollapsed: readAIPanelCollapsed(),
   viewed: readViewed(),
+  settingsOpen: false,
 
   setTheme(theme) {
     try {
@@ -142,6 +145,9 @@ export const useUI = create<UIState>((set, get) => ({
   },
   toggleAIPanel() {
     get().setAIPanelCollapsed(!get().aiPanelCollapsed);
+  },
+  setSettingsOpen(open) {
+    set({ settingsOpen: open });
   },
   setViewed(key, viewed) {
     set((s) => {

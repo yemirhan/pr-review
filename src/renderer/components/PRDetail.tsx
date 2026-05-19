@@ -13,9 +13,11 @@ import { AIReviewPanel } from './AIReviewPanel';
 import { FileTree } from './FileTree';
 import { DiffSearchBar, type DiffSearchBarHandle } from './DiffSearchBar';
 import { useDiffSearch, useScrollToMatch } from '../lib/diffSearch';
+import { ClickUpTaskTab } from './integrations/ClickUpTaskTab';
+import { ClickUpCommentsTab } from './integrations/ClickUpCommentsTab';
 import type { Repo } from '@shared/types';
 
-type Tab = 'files' | 'conversation' | 'commits' | 'conflicts';
+type Tab = 'files' | 'conversation' | 'commits' | 'conflicts' | 'clickup-task' | 'clickup-comments';
 
 export function PRDetail({ repo, prNumber }: { repo: Repo | null; prNumber: number | null }) {
   const qc = useQueryClient();
@@ -45,6 +47,20 @@ export function PRDetail({ repo, prNumber }: { repo: Repo | null; prNumber: numb
     queryFn: () => unwrap(api.prs.comments(repo!.id, prNumber!)),
     enabled: !!repo && prNumber != null
   });
+
+  const branchForClickUp = detailQ.data?.headRefName ?? null;
+  const clickupQ = useQuery({
+    queryKey:
+      repo && branchForClickUp
+        ? qk.clickupTaskByBranch(repo.id, branchForClickUp)
+        : ['no-clickup'],
+    queryFn: () => unwrap(api.integrations.clickup.taskByBranch(repo!.id, branchForClickUp!)),
+    enabled: !!repo && !!branchForClickUp,
+    retry: false,
+    staleTime: 30_000
+  });
+  const clickupResult = clickupQ.data ?? null;
+  const clickupLinked = clickupResult?.linked ?? null;
 
   const search = useDiffSearch(filesQ.data ?? []);
   const activeMatch = search.matches[search.current - 1];
@@ -157,6 +173,9 @@ export function PRDetail({ repo, prNumber }: { repo: Repo | null; prNumber: numb
     qc.invalidateQueries({ queryKey: qk.prDetail(repo.id, prNumber) });
     qc.invalidateQueries({ queryKey: qk.prs(repo.id) });
     qc.invalidateQueries({ queryKey: qk.prComments(repo.id, prNumber) });
+    if (branchForClickUp) {
+      qc.invalidateQueries({ queryKey: qk.clickupTaskByBranch(repo.id, branchForClickUp) });
+    }
   }
 
   return (
@@ -185,12 +204,69 @@ export function PRDetail({ repo, prNumber }: { repo: Repo | null; prNumber: numb
                 {pr.headRefName} → {pr.baseRefName}
               </span>
             </div>
-            <h1 className="text-[17px] font-semibold leading-snug tracking-[-0.01em] truncate text-fg">
-              {pr.title}
-            </h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-[17px] font-semibold leading-snug tracking-[-0.01em] truncate text-fg">
+                {pr.title}
+              </h1>
+              {clickupLinked && (
+                <ClickUpTitleButton
+                  repoId={repo.id}
+                  prNumber={pr.number}
+                  currentTitle={pr.title}
+                  taskId={clickupLinked.task.customId || clickupLinked.task.id}
+                  taskName={clickupLinked.task.name}
+                  onRenamed={invalidatePR}
+                />
+              )}
+            </div>
             <div className="flex items-center gap-2 mt-2">
               {pr.isDraft && <span className="chip">Draft</span>}
               <ChecksPill checks={pr.checks} />
+              {clickupLinked && (
+                <button
+                  className="inline-flex items-center gap-1.5 px-2 h-5 rounded text-2xs font-medium hover:opacity-90"
+                  style={{
+                    backgroundColor: `${clickupLinked.task.status.color}22`,
+                    color: clickupLinked.task.status.color,
+                    border: `1px solid ${clickupLinked.task.status.color}66`
+                  }}
+                  onClick={() => api.shell.openExternal(clickupLinked.task.url)}
+                  title={`${clickupLinked.task.name} — open in ClickUp`}
+                >
+                  <span
+                    className="w-1.5 h-1.5 rounded-full"
+                    style={{ backgroundColor: clickupLinked.task.status.color }}
+                  />
+                  <span className="font-mono">{clickupLinked.task.customId || clickupLinked.task.id}</span>
+                  <span className="opacity-70">·</span>
+                  <span>{clickupLinked.task.status.status}</span>
+                </button>
+              )}
+              {!clickupLinked && clickupResult && clickupResult.reason !== 'no-token' && (
+                <span
+                  className="inline-flex items-center gap-1.5 px-2 h-5 rounded text-2xs font-medium text-fg-subtle border border-border-muted"
+                  title={
+                    clickupResult.reason === 'no-id'
+                      ? `Couldn't parse a task ID from branch "${pr.headRefName}". Expected format: <project>-<digits>-<slug>.`
+                      : clickupResult.reason === 'not-found'
+                        ? `Task ${clickupResult.parsedTaskId} not found in ClickUp (or token lacks access).`
+                        : 'No ClickUp task linked.'
+                  }
+                >
+                  ClickUp:{' '}
+                  {clickupResult.reason === 'no-id'
+                    ? 'no task in branch'
+                    : `${clickupResult.parsedTaskId} not found`}
+                </span>
+              )}
+              {clickupQ.error && (
+                <span
+                  className="inline-flex items-center gap-1.5 px-2 h-5 rounded text-2xs font-medium text-danger border border-danger-emphasis/40"
+                  title={(clickupQ.error as ApiError).message}
+                >
+                  ClickUp error
+                </span>
+              )}
               <span className="text-2xs text-fg-subtle">
                 <span className="text-success">+{pr.additions}</span>{' '}
                 <span className="text-danger">−{pr.deletions}</span> ·{' '}
@@ -242,6 +318,12 @@ export function PRDetail({ repo, prNumber }: { repo: Repo | null; prNumber: numb
               label="Conflicts"
               tone="danger"
             />
+          )}
+          {clickupLinked && (
+            <>
+              <Tab id="clickup-task" active={tab} onClick={setTab} label="ClickUp Task" />
+              <Tab id="clickup-comments" active={tab} onClick={setTab} label="Task Comments" />
+            </>
           )}
         </div>
       </div>
@@ -306,6 +388,12 @@ export function PRDetail({ repo, prNumber }: { repo: Repo | null; prNumber: numb
         {tab === 'conflicts' && (
           <ConflictsView repo={repo} prNumber={pr.number} baseRefName={pr.baseRefName} />
         )}
+        {tab === 'clickup-task' && clickupLinked && (
+          <ClickUpTaskTab task={clickupLinked.task} />
+        )}
+        {tab === 'clickup-comments' && clickupLinked && (
+          <ClickUpCommentsTab taskId={clickupLinked.task.id} />
+        )}
       </div>
 
       {tab === 'files' && (
@@ -340,6 +428,52 @@ export function PRDetail({ repo, prNumber }: { repo: Repo | null; prNumber: numb
         />
       )}
     </div>
+  );
+}
+
+function ClickUpTitleButton({
+  repoId,
+  prNumber,
+  currentTitle,
+  taskId,
+  taskName,
+  onRenamed
+}: {
+  repoId: string;
+  prNumber: number;
+  currentTitle: string;
+  taskId: string;
+  taskName: string;
+  onRenamed: () => void;
+}) {
+  const desired = `${taskId} - ${taskName}`;
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  if (currentTitle.trim() === desired.trim()) return null;
+
+  async function rename() {
+    setBusy(true);
+    setErr(null);
+    try {
+      await unwrap(api.prs.editTitle(repoId, prNumber, desired));
+      onRenamed();
+    } catch (e) {
+      setErr((e as ApiError).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <button
+      onClick={rename}
+      disabled={busy}
+      className="shrink-0 text-2xs px-2 h-6 rounded border border-border-muted text-fg-muted hover:text-fg hover:bg-canvas-subtle disabled:opacity-50"
+      title={err ?? `Rename PR to: ${desired}`}
+    >
+      {busy ? 'Renaming…' : err ? 'Retry rename' : 'Use ClickUp title'}
+    </button>
   );
 }
 

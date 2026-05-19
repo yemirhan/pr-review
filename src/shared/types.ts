@@ -44,6 +44,11 @@ export interface ChecksRollup {
 
 export type ReviewDecision = 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | 'NONE';
 
+export type PRState = 'OPEN' | 'CLOSED' | 'MERGED';
+
+/** Filter passed to listPRs. */
+export type PRListState = 'open' | 'merged' | 'closed' | 'all';
+
 export interface PRSummary {
   number: number;
   title: string;
@@ -53,6 +58,11 @@ export interface PRSummary {
   baseRefName: string;
   createdAt: string;
   updatedAt: string;
+  /** Present for merged PRs. */
+  mergedAt?: string | null;
+  /** Present for closed/merged PRs. */
+  closedAt?: string | null;
+  state: PRState;
   labels: PRLabel[];
   isDraft: boolean;
   reviewDecision: ReviewDecision;
@@ -206,9 +216,106 @@ export interface GhError {
     | 'AI_FAILED'
     | 'AI_WORKING_TREE_DIRTY'
     | 'AI_WRONG_BRANCH'
-    | 'GIT_PUSH_FAILED';
+    | 'GIT_PUSH_FAILED'
+    | 'CLICKUP_NOT_CONFIGURED'
+    | 'CLICKUP_UNAUTHORIZED'
+    | 'CLICKUP_NOT_FOUND'
+    | 'CLICKUP_FAILED';
   message: string;
   stderr?: string;
+}
+
+export interface ClickUpStatus {
+  status: string;
+  color: string;
+  type?: string;
+  orderindex?: number;
+}
+
+export interface ClickUpAssignee {
+  id: number | string;
+  username: string;
+  initials?: string;
+  color?: string;
+  profilePicture?: string;
+}
+
+export interface ClickUpList {
+  id: string;
+  name: string;
+}
+
+export interface ClickUpTask {
+  id: string;
+  customId?: string | null;
+  name: string;
+  description?: string;
+  textContent?: string;
+  url: string;
+  status: ClickUpStatus;
+  list: ClickUpList;
+  assignees: ClickUpAssignee[];
+  dueDate?: string | null;
+  priority?: { priority: string; color: string } | null;
+  tags?: { name: string; tag_bg?: string; tag_fg?: string }[];
+}
+
+export interface ClickUpComment {
+  id: string;
+  user: { id: number | string; username: string; profilePicture?: string };
+  text: string;
+  date: string;
+}
+
+export interface ClickUpLinked {
+  task: ClickUpTask;
+  /** Whether a status mapping has been configured for this repo's PR review flow. */
+  mapped: boolean;
+}
+
+export type ClickUpLookupReason = 'no-token' | 'no-id' | 'not-found';
+
+export interface ClickUpLookupResult {
+  linked: ClickUpLinked | null;
+  /** Set when linked is null, explains why. */
+  reason?: ClickUpLookupReason;
+  /** The task ID we parsed from the branch, if any. */
+  parsedTaskId?: string | null;
+}
+
+export type IntegrationStatusTone = 'neutral' | 'success' | 'warning' | 'danger' | 'info';
+
+export interface IntegrationStatusChip {
+  integrationId: string;
+  label: string;
+  detail?: string;
+  color?: string;
+  tone?: IntegrationStatusTone;
+  href?: string;
+}
+
+export interface ClickUpRepoConfig {
+  listId?: string;
+  listName?: string;
+  statusMap: {
+    codeReview?: string;
+    readyForQA?: string;
+    inProgress?: string;
+  };
+}
+
+export interface ClickUpConfig {
+  apiToken: string | null;
+  /** ClickUp workspace (a.k.a. team) ID, used for custom-task-id lookups. */
+  teamId?: string | null;
+  /** Cached workspaces from /team; useful when user has multiple. */
+  teams?: { id: string; name: string }[];
+  repos: Record<string, ClickUpRepoConfig>;
+}
+
+export interface ClickUpAuthResult {
+  ok: boolean;
+  user?: { id: number | string; username: string; email?: string };
 }
 
 /** Source of credentials the AI client can use. */

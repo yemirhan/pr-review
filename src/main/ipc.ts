@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { GhClientError } from './gh/client';
 import { listPRs, getPR, getFiles, getComments } from './gh/prs';
 import { submitReview } from './gh/review';
+import { editPRTitle } from './gh/edit';
 import { mergePR } from './gh/merge';
 import { checkoutPR } from './gh/checkout';
 import { listRepos, addRepo, removeRepo, findRepo } from './repo/store';
@@ -13,6 +14,25 @@ import { openInEditor } from './editors/open';
 import { AIClientError, getAuthStatus, reviewPR } from './ai/client';
 import { applyPreflight, applyReview } from './ai/apply';
 import { commitAndPush, discardWorkingChanges } from './git/apply';
+import {
+  ClickUpClientError,
+  getList,
+  getTask,
+  getTaskComments,
+  getTeams,
+  whoami
+} from './integrations/clickup/client';
+import {
+  getApiToken,
+  getConfig as getClickUpConfig,
+  getRepoConfig as getClickUpRepoConfig,
+  getTeamId,
+  setApiToken,
+  setRepoConfig as setClickUpRepoConfig,
+  setTeamId,
+  setTeams
+} from './integrations/clickup/config';
+import { parseTaskIdFromBranch } from './integrations/clickup/branch';
 import type {
   ReviewDraft,
   MergeStrategy,
@@ -20,12 +40,17 @@ import type {
   CheckoutProgress,
   GhError,
   AIReviewChunk,
-  AIApplyProgress
+  AIApplyProgress,
+  ClickUpConfig,
+  ClickUpRepoConfig,
+  ClickUpLookupResult,
+  PRListState
 } from '@shared/types';
 
 function toErrPayload(err: unknown): GhError {
   if (err instanceof GhClientError) return err.toJSON();
   if (err instanceof AIClientError) return err.toJSON();
+  if (err instanceof ClickUpClientError) return err.toJSON();
   if (err instanceof Error) {
     const code = (err.message === 'NOT_A_GIT_REPO'
       ? 'NOT_A_GIT_REPO'
@@ -82,10 +107,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   // PRs -------------------------------------------------------------------
   ipcMain.handle(
     'prs:list',
-    safe(async (_e, repoId: string) => {
+    safe(async (_e, repoId: string, state?: PRListState) => {
       const repo = findRepo(repoId);
       if (!repo) throw new Error('Repo not found');
-      return listPRs(repo.owner, repo.name);
+      const s = state ?? 'open';
+      const limit = s === 'open' ? 100 : 50;
+      return listPRs(repo.owner, repo.name, s, limit);
     })
   );
 
@@ -104,6 +131,17 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       const repo = findRepo(repoId);
       if (!repo) throw new Error('Repo not found');
       return getFiles(repo.owner, repo.name, num);
+    })
+  );
+
+  ipcMain.handle(
+    'prs:editTitle',
+    safe(async (_e, repoId: string, num: number, title: string) => {
+      const repo = findRepo(repoId);
+      if (!repo) throw new Error('Repo not found');
+      const trimmed = title.trim();
+      if (!trimmed) throw new Error('Title cannot be empty');
+      await editPRTitle(repo.owner, repo.name, num, trimmed);
     })
   );
 
@@ -272,6 +310,122 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       const repo = findRepo(repoId);
       if (!repo) throw new Error('Repo not found');
       await discardWorkingChanges(repo.path, untrackedBefore ?? []);
+    })
+  );
+
+  // ClickUp integration ---------------------------------------------------
+  ipcMain.handle(
+    'clickup:config:get',
+    safe(async (): Promise<ClickUpConfig> => getClickUpConfig())
+  );
+
+  ipcMain.handle(
+    'clickup:config:setToken',
+    safe(async (_e, token: string | null) => {
+      setApiToken(token);
+    })
+  );
+
+  ipcMain.handle(
+    'clickup:config:setRepo',
+    safe(async (_e, repoId: string, cfg: ClickUpRepoConfig) => {
+      setClickUpRepoConfig(repoId, cfg);
+    })
+  );
+
+  ipcMain.handle(
+    'clickup:auth:test',
+    safe(async (_e, tokenOverride?: string) => {
+      const token = (tokenOverride ?? getApiToken()) || '';
+      if (!token) {
+        throw new ClickUpClientError(
+          'CLICKUP_NOT_CONFIGURED',
+          'No ClickUp API token configured.'
+        );
+      }
+      const user = await whoami(token);
+      // Best-effort: cache teams and auto-pick one if user hasn't chosen yet.
+      try {
+        const teams = await getTeams(token);
+        setTeams(teams);
+        const current = getTeamId();
+        if (!current && teams.length > 0) setTeamId(teams[0].id);
+      } catch {
+        /* token may lack workspace scope; let user pick manually later */
+      }
+      return user;
+    })
+  );
+
+  ipcMain.handle(
+    'clickup:config:setTeam',
+    safe(async (_e, teamId: string | null) => {
+      setTeamId(teamId);
+    })
+  );
+
+  ipcMain.handle(
+    'clickup:teams:list',
+    safe(async () => {
+      const token = getApiToken();
+      if (!token) {
+        throw new ClickUpClientError(
+          'CLICKUP_NOT_CONFIGURED',
+          'No ClickUp API token configured.'
+        );
+      }
+      const teams = await getTeams(token);
+      setTeams(teams);
+      return teams;
+    })
+  );
+
+  ipcMain.handle(
+    'clickup:lists:statuses',
+    safe(async (_e, listId: string) => {
+      const token = getApiToken();
+      if (!token) {
+        throw new ClickUpClientError(
+          'CLICKUP_NOT_CONFIGURED',
+          'No ClickUp API token configured.'
+        );
+      }
+      return getList(token, listId);
+    })
+  );
+
+  ipcMain.handle(
+    'clickup:task:byBranch',
+    safe(async (_e, repoId: string, branch: string): Promise<ClickUpLookupResult> => {
+      const token = getApiToken();
+      const parsedTaskId = parseTaskIdFromBranch(branch);
+      if (!token) return { linked: null, reason: 'no-token', parsedTaskId };
+      if (!parsedTaskId) return { linked: null, reason: 'no-id', parsedTaskId: null };
+      try {
+        const task = await getTask(token, parsedTaskId, getTeamId());
+        const repoCfg = getClickUpRepoConfig(repoId);
+        const mapped = !!repoCfg.statusMap.codeReview;
+        return { linked: { task, mapped }, parsedTaskId };
+      } catch (err) {
+        if (err instanceof ClickUpClientError && err.code === 'CLICKUP_NOT_FOUND') {
+          return { linked: null, reason: 'not-found', parsedTaskId };
+        }
+        throw err;
+      }
+    })
+  );
+
+  ipcMain.handle(
+    'clickup:task:comments',
+    safe(async (_e, taskId: string) => {
+      const token = getApiToken();
+      if (!token) {
+        throw new ClickUpClientError(
+          'CLICKUP_NOT_CONFIGURED',
+          'No ClickUp API token configured.'
+        );
+      }
+      return getTaskComments(token, taskId);
     })
   );
 

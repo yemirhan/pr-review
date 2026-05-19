@@ -16,8 +16,16 @@ export function MergeModal({
   const [strategy, setStrategy] = useState<MergeStrategy>('squash');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [confirmed, setConfirmed] = useState(false);
+
+  const isProtectedBase = /^(main|master)$/i.test(pr.baseRefName);
+  const needsConfirm = isProtectedBase && !confirmed;
 
   async function go() {
+    if (needsConfirm) {
+      setConfirmed(true);
+      return;
+    }
     setBusy(true);
     setErr(null);
     try {
@@ -37,6 +45,15 @@ export function MergeModal({
         <p className="text-2xs text-fg-muted mb-4">
           {pr.headRefName} → {pr.baseRefName}
         </p>
+        {isProtectedBase && (
+          <div className="mb-4 rounded-md border border-danger-emphasis/50 bg-danger-subtle/40 px-3 py-2 text-2xs text-danger flex items-start gap-2">
+            <span aria-hidden>⚠</span>
+            <span>
+              You are about to merge into <code className="font-mono font-semibold">{pr.baseRefName}</code>.
+              Double-check the strategy and the PR contents — this requires an extra confirmation.
+            </span>
+          </div>
+        )}
         <div className="space-y-2 mb-4">
           {(['squash', 'merge', 'rebase'] as MergeStrategy[]).map((s) => (
             <label
@@ -56,7 +73,7 @@ export function MergeModal({
                 className="mt-0.5 accent-accent"
               />
               <span>
-                <span className="block text-sm font-medium capitalize">{s} and merge</span>
+                <span className="block text-sm font-medium">{strategyLabel(s)}</span>
                 <span className="block text-2xs text-fg-muted">{describe(s)}</span>
               </span>
             </label>
@@ -71,13 +88,27 @@ export function MergeModal({
           <button className="btn" onClick={onClose} disabled={busy}>
             Cancel
           </button>
-          <button className="btn-primary disabled:opacity-50" onClick={go} disabled={busy}>
-            {busy ? 'Merging…' : 'Merge'}
+          <button
+            className={`disabled:opacity-50 ${needsConfirm ? 'btn-danger' : 'btn-primary'}`}
+            onClick={go}
+            disabled={busy}
+          >
+            {busy
+              ? 'Merging…'
+              : needsConfirm
+                ? `Confirm merge into ${pr.baseRefName}`
+                : `Merge (${strategy})`}
           </button>
         </div>
       </div>
     </Backdrop>
   );
+}
+
+function strategyLabel(s: MergeStrategy): string {
+  if (s === 'squash') return 'Squash and merge';
+  if (s === 'merge') return 'Create a merge commit';
+  return 'Rebase and merge';
 }
 
 function describe(s: MergeStrategy): string {

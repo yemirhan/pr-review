@@ -7,7 +7,9 @@ import type {
   InlineCommentThread,
   ChecksRollup,
   PRReviewSummary,
-  PRCommit
+  PRCommit,
+  PRListState,
+  PRState
 } from '@shared/types';
 
 const PR_LIST_FIELDS = [
@@ -19,6 +21,9 @@ const PR_LIST_FIELDS = [
   'baseRefName',
   'createdAt',
   'updatedAt',
+  'mergedAt',
+  'closedAt',
+  'state',
   'labels',
   'isDraft',
   'reviewDecision',
@@ -37,6 +42,9 @@ const PR_VIEW_FIELDS = [
   'baseRefName',
   'createdAt',
   'updatedAt',
+  'mergedAt',
+  'closedAt',
+  'state',
   'labels',
   'isDraft',
   'reviewDecision',
@@ -87,6 +95,9 @@ interface RawPRSummary {
   baseRefName: string;
   createdAt: string;
   updatedAt: string;
+  mergedAt?: string | null;
+  closedAt?: string | null;
+  state?: string;
   labels: { name: string; color: string }[];
   isDraft: boolean;
   reviewDecision: string;
@@ -97,6 +108,13 @@ interface RawPRSummary {
 }
 
 function mapSummary(raw: RawPRSummary): PRSummary {
+  const stateUpper = (raw.state ?? '').toUpperCase();
+  const state: PRState =
+    stateUpper === 'MERGED' || raw.mergedAt
+      ? 'MERGED'
+      : stateUpper === 'CLOSED'
+        ? 'CLOSED'
+        : 'OPEN';
   return {
     number: raw.number,
     title: raw.title,
@@ -106,6 +124,9 @@ function mapSummary(raw: RawPRSummary): PRSummary {
     baseRefName: raw.baseRefName,
     createdAt: raw.createdAt,
     updatedAt: raw.updatedAt,
+    mergedAt: raw.mergedAt ?? null,
+    closedAt: raw.closedAt ?? null,
+    state,
     labels: (raw.labels ?? []).map((l) => ({ name: l.name, color: l.color })),
     isDraft: raw.isDraft,
     reviewDecision: (raw.reviewDecision || 'NONE') as PRSummary['reviewDecision'],
@@ -116,16 +137,21 @@ function mapSummary(raw: RawPRSummary): PRSummary {
   };
 }
 
-export async function listPRs(owner: string, name: string): Promise<PRSummary[]> {
+export async function listPRs(
+  owner: string,
+  name: string,
+  state: PRListState = 'open',
+  limit = 100
+): Promise<PRSummary[]> {
   const raw = await ghJson<RawPRSummary[]>([
     'pr',
     'list',
     '--repo',
     `${owner}/${name}`,
     '--state',
-    'open',
+    state,
     '--limit',
-    '100',
+    String(limit),
     '--json',
     PR_LIST_FIELDS
   ]);
