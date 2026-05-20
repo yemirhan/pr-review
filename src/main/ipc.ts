@@ -36,6 +36,21 @@ import {
   setTeams
 } from './integrations/clickup/config';
 import { parseTaskIdFromBranch } from './integrations/clickup/branch';
+import {
+  JenkinsClientError,
+  getBuild as getJenkinsBuild,
+  getTestReport as getJenkinsTestReport,
+  listBuilds as listJenkinsBuilds,
+  testAuth as testJenkinsAuth,
+  triggerBuild as triggerJenkinsBuild
+} from './integrations/jenkins/client';
+import {
+  getAuthedConfig as getJenkinsAuthedConfig,
+  getConfig as getJenkinsConfig,
+  setBaseUrl as setJenkinsBaseUrl,
+  setCredentials as setJenkinsCredentials,
+  setRepoConfig as setJenkinsRepoConfig
+} from './integrations/jenkins/config';
 import type {
   ReviewDraft,
   MergeStrategy,
@@ -51,13 +66,16 @@ import type {
   ClickUpRepoConfig,
   ClickUpLookupResult,
   PRListState,
-  CreatePRInput
+  CreatePRInput,
+  JenkinsConfig,
+  JenkinsRepoConfig
 } from '@shared/types';
 
 function toErrPayload(err: unknown): GhError {
   if (err instanceof GhClientError) return err.toJSON();
   if (err instanceof AIClientError) return err.toJSON();
   if (err instanceof ClickUpClientError) return err.toJSON();
+  if (err instanceof JenkinsClientError) return err.toJSON();
   if (err instanceof Error) {
     const code = (err.message === 'NOT_A_GIT_REPO'
       ? 'NOT_A_GIT_REPO'
@@ -526,6 +544,98 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
         );
       }
       return getTaskComments(token, taskId);
+    })
+  );
+
+  // Jenkins integration ---------------------------------------------------
+  ipcMain.handle(
+    'jenkins:config:get',
+    safe(async (): Promise<JenkinsConfig> => getJenkinsConfig())
+  );
+
+  ipcMain.handle(
+    'jenkins:config:setBaseUrl',
+    safe(async (_e, url: string | null) => {
+      setJenkinsBaseUrl(url);
+    })
+  );
+
+  ipcMain.handle(
+    'jenkins:config:setCredentials',
+    safe(async (_e, username: string | null, apiToken: string | null) => {
+      setJenkinsCredentials(username, apiToken);
+    })
+  );
+
+  ipcMain.handle(
+    'jenkins:config:setRepo',
+    safe(async (_e, repoId: string, cfg: JenkinsRepoConfig | null) => {
+      setJenkinsRepoConfig(repoId, cfg);
+    })
+  );
+
+  ipcMain.handle(
+    'jenkins:auth:test',
+    safe(
+      async (
+        _e,
+        override?: { baseUrl?: string; username?: string; apiToken?: string }
+      ) => {
+        const stored = getJenkinsConfig();
+        const baseUrl = (override?.baseUrl ?? stored.baseUrl ?? '').trim().replace(/\/+$/, '');
+        const username = (override?.username ?? stored.username ?? '').trim();
+        const apiToken = (override?.apiToken ?? stored.apiToken ?? '').trim();
+        if (!baseUrl || !username || !apiToken) {
+          throw new JenkinsClientError(
+            'JENKINS_NOT_CONFIGURED',
+            'Jenkins base URL, username, and API token are all required.'
+          );
+        }
+        return testJenkinsAuth({ baseUrl, username, apiToken });
+      }
+    )
+  );
+
+  function requireJenkins() {
+    const cfg = getJenkinsAuthedConfig();
+    if (!cfg) {
+      throw new JenkinsClientError(
+        'JENKINS_NOT_CONFIGURED',
+        'Jenkins is not configured. Add credentials in Settings → Jenkins.'
+      );
+    }
+    return cfg;
+  }
+
+  ipcMain.handle(
+    'jenkins:builds:list',
+    safe(async (_e, jobPath: string, branch: string, limit?: number) => {
+      const cfg = requireJenkins();
+      return listJenkinsBuilds(cfg, jobPath, branch, limit ?? 20);
+    })
+  );
+
+  ipcMain.handle(
+    'jenkins:builds:get',
+    safe(async (_e, jobPath: string, branch: string, buildNumber: number) => {
+      const cfg = requireJenkins();
+      return getJenkinsBuild(cfg, jobPath, branch, buildNumber);
+    })
+  );
+
+  ipcMain.handle(
+    'jenkins:builds:tests',
+    safe(async (_e, jobPath: string, branch: string, buildNumber: number) => {
+      const cfg = requireJenkins();
+      return getJenkinsTestReport(cfg, jobPath, branch, buildNumber);
+    })
+  );
+
+  ipcMain.handle(
+    'jenkins:builds:trigger',
+    safe(async (_e, jobPath: string, branch: string) => {
+      const cfg = requireJenkins();
+      await triggerJenkinsBuild(cfg, jobPath, branch);
     })
   );
 

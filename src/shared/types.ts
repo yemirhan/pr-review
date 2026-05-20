@@ -247,7 +247,11 @@ export interface GhError {
     | 'CLICKUP_NOT_CONFIGURED'
     | 'CLICKUP_UNAUTHORIZED'
     | 'CLICKUP_NOT_FOUND'
-    | 'CLICKUP_FAILED';
+    | 'CLICKUP_FAILED'
+    | 'JENKINS_NOT_CONFIGURED'
+    | 'JENKINS_UNAUTHORIZED'
+    | 'JENKINS_NOT_FOUND'
+    | 'JENKINS_FAILED';
   message: string;
   stderr?: string;
 }
@@ -343,6 +347,84 @@ export interface ClickUpConfig {
 export interface ClickUpAuthResult {
   ok: boolean;
   user?: { id: number | string; username: string; email?: string };
+}
+
+// ---------------------------------------------------------------------------
+// Jenkins integration
+// ---------------------------------------------------------------------------
+
+export interface JenkinsPipelineConfig {
+  /** Stable id used as a React key; generated client-side. */
+  id: string;
+  /** Display name, e.g. "API tests" or "Frontend build". */
+  label: string;
+  /** Path segment under baseUrl identifying the multibranch job, e.g. "job/myorg-api". */
+  jobPath: string;
+}
+
+export interface JenkinsRepoConfig {
+  pipelines: JenkinsPipelineConfig[];
+}
+
+export interface JenkinsConfig {
+  baseUrl: string | null;
+  username: string | null;
+  apiToken: string | null;
+  repos: Record<string, JenkinsRepoConfig>;
+}
+
+export interface JenkinsAuthResult {
+  ok: boolean;
+  user?: string;
+}
+
+export type JenkinsBuildResult =
+  | 'SUCCESS'
+  | 'FAILURE'
+  | 'UNSTABLE'
+  | 'ABORTED'
+  | 'NOT_BUILT'
+  | 'RUNNING'
+  | 'UNKNOWN';
+
+export interface JenkinsBuild {
+  number: number;
+  url: string;
+  result: JenkinsBuildResult;
+  building: boolean;
+  /** Unix ms timestamp build started. */
+  timestamp: number;
+  /** Duration ms — 0 while building. */
+  duration: number;
+  estimatedDuration?: number;
+  /** Best-effort cause string ("Started by user X", "Push by foo", etc.). */
+  cause?: string | null;
+  /** Build SHA if available from actions. */
+  commitSha?: string | null;
+}
+
+export interface JenkinsStage {
+  id: string;
+  name: string;
+  status: JenkinsBuildResult;
+  durationMs: number;
+}
+
+export interface JenkinsBuildDetail extends JenkinsBuild {
+  stages: JenkinsStage[];
+}
+
+export interface JenkinsTestFailure {
+  className: string;
+  name: string;
+}
+
+export interface JenkinsTestSummary {
+  total: number;
+  failed: number;
+  skipped: number;
+  passed: number;
+  failures: JenkinsTestFailure[];
 }
 
 /** Source of credentials the AI client can use. */

@@ -37,5 +37,12 @@ export const qk = {
   clickupTaskByBranch: (repoId: string, branch: string) =>
     ['clickup', 'task', repoId, branch] as const,
   clickupComments: (taskId: string) => ['clickup', 'comments', taskId] as const,
-  clickupListStatuses: (listId: string) => ['clickup', 'list', listId] as const
+  clickupListStatuses: (listId: string) => ['clickup', 'list', listId] as const,
+  jenkinsConfig: ['jenkins', 'config'] as const,
+  jenkinsBuilds: (jobPath: string, branch: string) =>
+    ['jenkins', 'builds', jobPath, branch] as const,
+  jenkinsBuild: (jobPath: string, branch: string, num: number) =>
+    ['jenkins', 'build', jobPath, branch, num] as const,
+  jenkinsTests: (jobPath: string, branch: string, num: number) =>
+    ['jenkins', 'tests', jobPath, branch, num] as const
 };

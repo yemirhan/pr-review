@@ -29,7 +29,13 @@ import type {
   PRListState,
   CreatePRInput,
   SystemTool,
-  PRCheckRun
+  PRCheckRun,
+  JenkinsConfig,
+  JenkinsRepoConfig,
+  JenkinsAuthResult,
+  JenkinsBuild,
+  JenkinsBuildDetail,
+  JenkinsTestSummary
 } from '@shared/types';
 
 export type Result<T> = { ok: true; data: T } | { ok: false; error: GhError };
@@ -138,6 +144,27 @@ const api = {
         call<ClickUpLookupResult>('clickup:task:byBranch', repoId, branch),
       taskComments: (taskId: string) =>
         call<ClickUpComment[]>('clickup:task:comments', taskId)
+    },
+    jenkins: {
+      getConfig: () => call<JenkinsConfig>('jenkins:config:get'),
+      setBaseUrl: (url: string | null) => call<void>('jenkins:config:setBaseUrl', url),
+      setCredentials: (username: string | null, apiToken: string | null) =>
+        call<void>('jenkins:config:setCredentials', username, apiToken),
+      setRepoConfig: (repoId: string, cfg: JenkinsRepoConfig | null) =>
+        call<void>('jenkins:config:setRepo', repoId, cfg),
+      testAuth: (override?: {
+        baseUrl?: string;
+        username?: string;
+        apiToken?: string;
+      }) => call<JenkinsAuthResult>('jenkins:auth:test', override),
+      listBuilds: (jobPath: string, branch: string, limit?: number) =>
+        call<JenkinsBuild[]>('jenkins:builds:list', jobPath, branch, limit),
+      getBuild: (jobPath: string, branch: string, buildNumber: number) =>
+        call<JenkinsBuildDetail>('jenkins:builds:get', jobPath, branch, buildNumber),
+      getTests: (jobPath: string, branch: string, buildNumber: number) =>
+        call<JenkinsTestSummary | null>('jenkins:builds:tests', jobPath, branch, buildNumber),
+      triggerBuild: (jobPath: string, branch: string) =>
+        call<void>('jenkins:builds:trigger', jobPath, branch)
     }
   }
 };

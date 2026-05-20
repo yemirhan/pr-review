@@ -35,3 +35,4 @@ Thumbs.db
 
 # Electron-builder cache
 .electron-builder-cache/
+jenkins-pipelines.csv

@@ -19,6 +19,7 @@ import { DiffSearchBar, type DiffSearchBarHandle } from './DiffSearchBar';
 import { useDiffSearch, useScrollToMatch } from '../lib/diffSearch';
 import { ClickUpTaskTab } from './integrations/ClickUpTaskTab';
 import { ClickUpCommentsTab } from './integrations/ClickUpCommentsTab';
+import { JenkinsBuildsTab } from './integrations/JenkinsBuildsTab';
 import type { Repo } from '@shared/types';
 
 type Tab =
@@ -28,7 +29,8 @@ type Tab =
   | 'checks'
   | 'conflicts'
   | 'clickup-task'
-  | 'clickup-comments';
+  | 'clickup-comments'
+  | 'jenkins';
 
 export function PRDetail({ repo, prNumber }: { repo: Repo | null; prNumber: number | null }) {
   const qc = useQueryClient();
@@ -72,6 +74,18 @@ export function PRDetail({ repo, prNumber }: { repo: Repo | null; prNumber: numb
   });
   const clickupResult = clickupQ.data ?? null;
   const clickupLinked = clickupResult?.linked ?? null;
+
+  const jenkinsCfgQ = useQuery({
+    queryKey: qk.jenkinsConfig,
+    queryFn: () => unwrap(api.integrations.jenkins.getConfig()),
+    staleTime: 60_000
+  });
+  const jenkinsAvailable =
+    !!repo &&
+    !!jenkinsCfgQ.data?.baseUrl &&
+    !!jenkinsCfgQ.data.username &&
+    !!jenkinsCfgQ.data.apiToken &&
+    (jenkinsCfgQ.data.repos[repo.id]?.pipelines.length ?? 0) > 0;
 
   const search = useDiffSearch(filesQ.data ?? []);
   const activeMatch = search.matches[search.current - 1];
@@ -343,6 +357,9 @@ export function PRDetail({ repo, prNumber }: { repo: Repo | null; prNumber: numb
               <Tab id="clickup-comments" active={tab} onClick={setTab} label="Task Comments" />
             </>
           )}
+          {jenkinsAvailable && (
+            <Tab id="jenkins" active={tab} onClick={setTab} label="Jenkins" />
+          )}
         </div>
       </div>
 
@@ -407,6 +424,9 @@ export function PRDetail({ repo, prNumber }: { repo: Repo | null; prNumber: numb
             )}
             {tab === 'clickup-comments' && clickupLinked && (
               <ClickUpCommentsTab taskId={clickupLinked.task.id} />
+            )}
+            {tab === 'jenkins' && (
+              <JenkinsBuildsTab repo={repo} branch={pr.headRefName} />
             )}
           </div>
 
