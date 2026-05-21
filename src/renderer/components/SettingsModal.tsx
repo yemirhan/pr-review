@@ -26,7 +26,10 @@ import type {
   JenkinsPipelineConfig,
   JenkinsRepoConfig,
   Repo,
-  SystemTool
+  SystemTool,
+  VercelProjectConfig,
+  VercelProjectLookup,
+  VercelRepoConfig
 } from '@shared/types';
 import { Dialog, DialogContent, DialogTitle } from './ui/dialog';
 import { Button } from './ui/button';
@@ -43,13 +46,14 @@ import { cn } from '../lib/cn';
 import { Skeleton } from './ui/skeleton';
 import { Spinner } from './ui/spinner';
 
-type TabKey = 'appearance' | 'system' | 'clickup' | 'jenkins';
+type TabKey = 'appearance' | 'system' | 'clickup' | 'jenkins' | 'vercel';
 
 const TABS: { key: TabKey; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { key: 'appearance', label: 'Appearance', icon: Palette },
   { key: 'system', label: 'System', icon: Terminal },
   { key: 'clickup', label: 'ClickUp', icon: Plug },
-  { key: 'jenkins', label: 'Jenkins', icon: Plug }
+  { key: 'jenkins', label: 'Jenkins', icon: Plug },
+  { key: 'vercel', label: 'Vercel', icon: Plug }
 ];
 
 const NO_STATUS = '__none__';
@@ -92,6 +96,7 @@ export function SettingsModal() {
             {tab === 'system' && <SystemSection />}
             {tab === 'clickup' && <ClickUpSection />}
             {tab === 'jenkins' && <JenkinsSection />}
+            {tab === 'vercel' && <VercelSection />}
           </div>
         </div>
       </DialogContent>
@@ -1252,6 +1257,329 @@ function JenkinsRepoMapping({
             <div className="text-2xs text-fg-subtle pl-1">
               <span className="text-success">Detected · </span>
               {hints[p.id]}
+            </div>
+          )}
+        </div>
+      ))}
+      {err && <div className="text-2xs text-danger">{err}</div>}
+    </div>
+  );
+}
+
+function VercelSection() {
+  const qc = useQueryClient();
+  const reposQ = useQuery({
+    queryKey: qk.repos,
+    queryFn: () => unwrap(api.repos.list())
+  });
+  const cfgQ = useQuery({
+    queryKey: qk.vercelConfig,
+    queryFn: () => unwrap(api.integrations.vercel.getConfig())
+  });
+
+  const [token, setToken] = useState('');
+  const [teamId, setTeamId] = useState('');
+  const [testState, setTestState] = useState<
+    | { status: 'idle' }
+    | { status: 'testing' }
+    | { status: 'ok'; user: string }
+    | { status: 'err'; message: string }
+  >({ status: 'idle' });
+
+  useEffect(() => {
+    if (cfgQ.data) {
+      setToken(cfgQ.data.token ?? '');
+      setTeamId(cfgQ.data.teamId ?? '');
+    }
+  }, [cfgQ.data]);
+
+  async function saveAndTest() {
+    setTestState({ status: 'testing' });
+    try {
+      const trimmedToken = token.trim();
+      const trimmedTeam = teamId.trim();
+      const res = await unwrap(
+        api.integrations.vercel.testAuth({
+          token: trimmedToken,
+          teamId: trimmedTeam || null
+        })
+      );
+      await unwrap(api.integrations.vercel.setToken(trimmedToken));
+      await unwrap(api.integrations.vercel.setTeamId(trimmedTeam || null));
+      await qc.invalidateQueries({ queryKey: qk.vercelConfig });
+      setTestState({ status: 'ok', user: res.user ?? 'authenticated' });
+    } catch (e) {
+      setTestState({ status: 'err', message: (e as ApiError).message });
+    }
+  }
+
+  async function clear() {
+    await unwrap(api.integrations.vercel.setToken(null));
+    await unwrap(api.integrations.vercel.setTeamId(null));
+    setToken('');
+    setTeamId('');
+    setTestState({ status: 'idle' });
+    await qc.invalidateQueries({ queryKey: qk.vercelConfig });
+  }
+
+  const configured = !!cfgQ.data?.token;
+
+  return (
+    <section className="space-y-6">
+      <SectionHeader
+        title="Vercel"
+        description="Connect a Vercel account to see preview deployment status for each PR's branch."
+      />
+
+      <div className="space-y-2">
+        <Label htmlFor="vercel-token">API Token</Label>
+        <p className="text-2xs text-fg-subtle">
+          Create one at{' '}
+          <a
+            href="https://vercel.com/account/tokens"
+            onClick={(e) => {
+              e.preventDefault();
+              api.shell.openExternal('https://vercel.com/account/tokens');
+            }}
+            className="text-accent hover:underline"
+          >
+            vercel.com/account/tokens
+          </a>
+          . Stored locally.
+        </p>
+        <Input
+          id="vercel-token"
+          type="password"
+          placeholder="vercel_…"
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+          className="font-mono text-2xs"
+        />
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="vercel-team">Team ID (optional)</Label>
+        <p className="text-2xs text-fg-subtle">
+          Leave blank for a personal account. For a team, paste the team id (starts with{' '}
+          <code className="text-fg-muted">team_</code>) from the team's settings page.
+        </p>
+        <Input
+          id="vercel-team"
+          type="text"
+          placeholder="team_…"
+          value={teamId}
+          onChange={(e) => setTeamId(e.target.value)}
+          className="font-mono text-2xs"
+        />
+      </div>
+
+      <div className="flex items-center gap-2">
+        <Button
+          variant="primary"
+          onClick={saveAndTest}
+          disabled={!token.trim() || testState.status === 'testing'}
+        >
+          {testState.status === 'testing' ? 'Testing…' : 'Save & test'}
+        </Button>
+        {configured && (
+          <Button variant="ghost" onClick={clear}>
+            Clear
+          </Button>
+        )}
+        {testState.status === 'ok' && (
+          <span className="text-2xs text-success">Connected as {testState.user}</span>
+        )}
+        {testState.status === 'err' && (
+          <span className="text-2xs text-danger">{testState.message}</span>
+        )}
+      </div>
+
+      {configured && (
+        <div className="space-y-3">
+          <Label>Per-repo Vercel projects</Label>
+          <p className="text-2xs text-fg-subtle -mt-1">
+            Map each repo to one or more Vercel projects. A repo can have multiple projects
+            (handy for a monorepo with several deploy targets).
+          </p>
+          {(reposQ.data ?? []).length === 0 && (
+            <div className="text-2xs text-fg-subtle">No repos added yet.</div>
+          )}
+          {(reposQ.data ?? []).map((r) => (
+            <VercelRepoMapping
+              key={r.id}
+              repo={r}
+              config={cfgQ.data?.repos[r.id] ?? null}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function VercelRepoMapping({
+  repo,
+  config
+}: {
+  repo: Repo;
+  config: VercelRepoConfig | null;
+}) {
+  const qc = useQueryClient();
+  const [projects, setProjects] = useState<VercelProjectConfig[]>(config?.projects ?? []);
+  const [err, setErr] = useState<string | null>(null);
+  const [savedAt, setSavedAt] = useState(0);
+  const [pickerFor, setPickerFor] = useState<string | null>(null);
+
+  // Loaded lazily when the user opens the picker on any row.
+  const projectsQ = useQuery({
+    queryKey: qk.vercelProjects,
+    queryFn: () => unwrap(api.integrations.vercel.listProjects()),
+    enabled: pickerFor !== null,
+    staleTime: 60_000
+  });
+
+  useEffect(() => {
+    setProjects(config?.projects ?? []);
+  }, [config]);
+
+  async function save(next: VercelProjectConfig[]) {
+    setErr(null);
+    try {
+      await unwrap(
+        api.integrations.vercel.setRepoConfig(
+          repo.id,
+          next.length > 0 ? { projects: next } : null
+        )
+      );
+      await qc.invalidateQueries({ queryKey: qk.vercelConfig });
+      setSavedAt(Date.now());
+    } catch (e) {
+      setErr((e as ApiError).message);
+    }
+  }
+
+  function updateRow(id: string, patch: Partial<VercelProjectConfig>) {
+    setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, ...patch } : p)));
+  }
+
+  function commit() {
+    const next = projects.map((p) => ({
+      ...p,
+      label: p.label.trim(),
+      projectId: p.projectId.trim()
+    }));
+    void save(next);
+  }
+
+  function addRow() {
+    const id =
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `v-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    setProjects((prev) => [...prev, { id, label: '', projectId: '' }]);
+  }
+
+  function removeRow(id: string) {
+    const next = projects.filter((p) => p.id !== id);
+    setProjects(next);
+    void save(next);
+  }
+
+  function pickProject(rowId: string, project: VercelProjectLookup) {
+    setProjects((prev) =>
+      prev.map((p) =>
+        p.id === rowId
+          ? {
+              ...p,
+              label: p.label.trim() || project.name,
+              projectId: project.id
+            }
+          : p
+      )
+    );
+    setPickerFor(null);
+    // Persist after state settles.
+    setTimeout(commit, 0);
+  }
+
+  const justSaved = Date.now() - savedAt < 1500;
+
+  return (
+    <div className="rounded-md border border-border-muted p-4 space-y-3">
+      <div className="flex items-center gap-2">
+        <div className="text-sm font-medium text-fg">{repo.label}</div>
+        {justSaved && <span className="text-2xs text-success">Saved</span>}
+        <Button variant="ghost" size="sm" className="ml-auto" onClick={addRow}>
+          + Add project
+        </Button>
+      </div>
+      {projects.length === 0 && (
+        <div className="text-2xs text-fg-subtle">
+          No projects configured. Click <span className="font-medium">Add project</span> to add one.
+        </div>
+      )}
+      {projects.map((p) => (
+        <div key={p.id} className="space-y-1">
+          <div className="grid grid-cols-[1fr_2fr_auto_auto] gap-2 items-center">
+            <Input
+              type="text"
+              placeholder="Label (e.g. Marketing site)"
+              value={p.label}
+              onChange={(e) => updateRow(p.id, { label: e.target.value })}
+              onBlur={commit}
+              className="text-2xs"
+            />
+            <Input
+              type="text"
+              placeholder="prj_…"
+              value={p.projectId}
+              onChange={(e) => updateRow(p.id, { projectId: e.target.value })}
+              onBlur={commit}
+              className="font-mono text-2xs"
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPickerFor(pickerFor === p.id ? null : p.id)}
+              title="Pick a project from your Vercel account"
+            >
+              {pickerFor === p.id ? 'Cancel' : 'Pick…'}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => removeRow(p.id)}
+              title="Remove project"
+            >
+              Remove
+            </Button>
+          </div>
+          {pickerFor === p.id && (
+            <div className="rounded-md border border-border-muted bg-canvas-inset/40 p-2 max-h-56 overflow-y-auto">
+              {projectsQ.isLoading && (
+                <div className="text-2xs text-fg-subtle px-2 py-1">Loading projects…</div>
+              )}
+              {projectsQ.error && (
+                <div className="text-2xs text-danger px-2 py-1">
+                  {(projectsQ.error as ApiError).message}
+                </div>
+              )}
+              {(projectsQ.data ?? []).length === 0 && !projectsQ.isLoading && !projectsQ.error && (
+                <div className="text-2xs text-fg-subtle px-2 py-1">No projects found.</div>
+              )}
+              {(projectsQ.data ?? []).map((proj) => (
+                <button
+                  key={proj.id}
+                  className="w-full text-left flex items-center gap-2 px-2 py-1 rounded text-2xs hover:bg-canvas-subtle"
+                  onClick={() => pickProject(p.id, proj)}
+                >
+                  <span className="flex-1 truncate text-fg">{proj.name}</span>
+                  {proj.framework && (
+                    <span className="text-fg-subtle">{proj.framework}</span>
+                  )}
+                  <code className="text-fg-subtle font-mono">{proj.id}</code>
+                </button>
+              ))}
             </div>
           )}
         </div>

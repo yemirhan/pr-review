@@ -251,7 +251,11 @@ export interface GhError {
     | 'JENKINS_NOT_CONFIGURED'
     | 'JENKINS_UNAUTHORIZED'
     | 'JENKINS_NOT_FOUND'
-    | 'JENKINS_FAILED';
+    | 'JENKINS_FAILED'
+    | 'VERCEL_NOT_CONFIGURED'
+    | 'VERCEL_UNAUTHORIZED'
+    | 'VERCEL_NOT_FOUND'
+    | 'VERCEL_FAILED';
   message: string;
   stderr?: string;
 }
@@ -425,6 +429,67 @@ export interface JenkinsTestSummary {
   skipped: number;
   passed: number;
   failures: JenkinsTestFailure[];
+}
+
+// ---------------------------------------------------------------------------
+// Vercel integration
+// ---------------------------------------------------------------------------
+
+export interface VercelProjectConfig {
+  /** Stable id for React keys; generated client-side. */
+  id: string;
+  /** Display label, e.g. "Marketing site". */
+  label: string;
+  /** Vercel project id (prj_…). */
+  projectId: string;
+}
+
+export interface VercelRepoConfig {
+  projects: VercelProjectConfig[];
+}
+
+export interface VercelConfig {
+  token: string | null;
+  /** Optional team id (team_… or vercel team slug). Personal accounts leave blank. */
+  teamId: string | null;
+  repos: Record<string, VercelRepoConfig>;
+}
+
+export interface VercelAuthResult {
+  ok: boolean;
+  user?: string;
+}
+
+export type VercelDeploymentState =
+  | 'READY'
+  | 'BUILDING'
+  | 'INITIALIZING'
+  | 'QUEUED'
+  | 'ERROR'
+  | 'CANCELED'
+  | 'UNKNOWN';
+
+export interface VercelDeployment {
+  uid: string;
+  /** Hostname like `myapp-abc123.vercel.app` (no scheme). */
+  url: string;
+  /** Direct dashboard URL for inspecting the deployment. */
+  inspectorUrl: string | null;
+  state: VercelDeploymentState;
+  target: 'preview' | 'production' | null;
+  createdAt: number;
+  readyAt: number | null;
+  buildingAt: number | null;
+  branch: string | null;
+  commitSha: string | null;
+  commitMessage: string | null;
+  creator: string | null;
+}
+
+export interface VercelProjectLookup {
+  id: string;
+  name: string;
+  framework: string | null;
 }
 
 /** Source of credentials the AI client can use. */

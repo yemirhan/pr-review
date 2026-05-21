@@ -35,7 +35,12 @@ import type {
   JenkinsAuthResult,
   JenkinsBuild,
   JenkinsBuildDetail,
-  JenkinsTestSummary
+  JenkinsTestSummary,
+  VercelConfig,
+  VercelRepoConfig,
+  VercelAuthResult,
+  VercelDeployment,
+  VercelProjectLookup
 } from '@shared/types';
 
 export type Result<T> = { ok: true; data: T } | { ok: false; error: GhError };
@@ -165,6 +170,19 @@ const api = {
         call<JenkinsTestSummary | null>('jenkins:builds:tests', jobPath, branch, buildNumber),
       triggerBuild: (jobPath: string, branch: string) =>
         call<void>('jenkins:builds:trigger', jobPath, branch)
+    },
+    vercel: {
+      getConfig: () => call<VercelConfig>('vercel:config:get'),
+      setToken: (token: string | null) => call<void>('vercel:config:setToken', token),
+      setTeamId: (teamId: string | null) =>
+        call<void>('vercel:config:setTeamId', teamId),
+      setRepoConfig: (repoId: string, cfg: VercelRepoConfig | null) =>
+        call<void>('vercel:config:setRepo', repoId, cfg),
+      testAuth: (override?: { token?: string; teamId?: string | null }) =>
+        call<VercelAuthResult>('vercel:auth:test', override),
+      listProjects: () => call<VercelProjectLookup[]>('vercel:projects:list'),
+      listDeployments: (projectId: string, branch: string, limit?: number) =>
+        call<VercelDeployment[]>('vercel:deployments:list', projectId, branch, limit)
     }
   }
 };

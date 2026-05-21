@@ -44,5 +44,9 @@ export const qk = {
   jenkinsBuild: (jobPath: string, branch: string, num: number) =>
     ['jenkins', 'build', jobPath, branch, num] as const,
   jenkinsTests: (jobPath: string, branch: string, num: number) =>
-    ['jenkins', 'tests', jobPath, branch, num] as const
+    ['jenkins', 'tests', jobPath, branch, num] as const,
+  vercelConfig: ['vercel', 'config'] as const,
+  vercelProjects: ['vercel', 'projects'] as const,
+  vercelDeployments: (projectId: string, branch: string) =>
+    ['vercel', 'deployments', projectId, branch] as const
 };

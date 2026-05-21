@@ -20,6 +20,7 @@ import { useDiffSearch, useScrollToMatch } from '../lib/diffSearch';
 import { ClickUpTaskTab } from './integrations/ClickUpTaskTab';
 import { ClickUpCommentsTab } from './integrations/ClickUpCommentsTab';
 import { JenkinsBuildsTab } from './integrations/JenkinsBuildsTab';
+import { VercelDeploymentsTab } from './integrations/VercelDeploymentsTab';
 import type { Repo } from '@shared/types';
 
 type Tab =
@@ -30,7 +31,8 @@ type Tab =
   | 'conflicts'
   | 'clickup-task'
   | 'clickup-comments'
-  | 'jenkins';
+  | 'jenkins'
+  | 'vercel';
 
 export function PRDetail({ repo, prNumber }: { repo: Repo | null; prNumber: number | null }) {
   const qc = useQueryClient();
@@ -86,6 +88,16 @@ export function PRDetail({ repo, prNumber }: { repo: Repo | null; prNumber: numb
     !!jenkinsCfgQ.data.username &&
     !!jenkinsCfgQ.data.apiToken &&
     (jenkinsCfgQ.data.repos[repo.id]?.pipelines.length ?? 0) > 0;
+
+  const vercelCfgQ = useQuery({
+    queryKey: qk.vercelConfig,
+    queryFn: () => unwrap(api.integrations.vercel.getConfig()),
+    staleTime: 60_000
+  });
+  const vercelAvailable =
+    !!repo &&
+    !!vercelCfgQ.data?.token &&
+    (vercelCfgQ.data.repos[repo.id]?.projects.length ?? 0) > 0;
 
   const search = useDiffSearch(filesQ.data ?? []);
   const activeMatch = search.matches[search.current - 1];
@@ -360,6 +372,9 @@ export function PRDetail({ repo, prNumber }: { repo: Repo | null; prNumber: numb
           {jenkinsAvailable && (
             <Tab id="jenkins" active={tab} onClick={setTab} label="Jenkins" />
           )}
+          {vercelAvailable && (
+            <Tab id="vercel" active={tab} onClick={setTab} label="Vercel" />
+          )}
         </div>
       </div>
 
@@ -427,6 +442,9 @@ export function PRDetail({ repo, prNumber }: { repo: Repo | null; prNumber: numb
             )}
             {tab === 'jenkins' && (
               <JenkinsBuildsTab repo={repo} branch={pr.headRefName} />
+            )}
+            {tab === 'vercel' && (
+              <VercelDeploymentsTab repo={repo} branch={pr.headRefName} />
             )}
           </div>
 

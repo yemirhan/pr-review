@@ -51,6 +51,19 @@ import {
   setCredentials as setJenkinsCredentials,
   setRepoConfig as setJenkinsRepoConfig
 } from './integrations/jenkins/config';
+import {
+  VercelClientError,
+  listBranchDeployments,
+  listProjects as listVercelProjects,
+  whoami as vercelWhoami
+} from './integrations/vercel/client';
+import {
+  getAuthedConfig as getVercelAuthedConfig,
+  getConfig as getVercelConfig,
+  setRepoConfig as setVercelRepoConfig,
+  setTeamId as setVercelTeamId,
+  setToken as setVercelToken
+} from './integrations/vercel/config';
 import type {
   ReviewDraft,
   MergeStrategy,
@@ -68,7 +81,9 @@ import type {
   PRListState,
   CreatePRInput,
   JenkinsConfig,
-  JenkinsRepoConfig
+  JenkinsRepoConfig,
+  VercelConfig,
+  VercelRepoConfig
 } from '@shared/types';
 
 function toErrPayload(err: unknown): GhError {
@@ -76,6 +91,7 @@ function toErrPayload(err: unknown): GhError {
   if (err instanceof AIClientError) return err.toJSON();
   if (err instanceof ClickUpClientError) return err.toJSON();
   if (err instanceof JenkinsClientError) return err.toJSON();
+  if (err instanceof VercelClientError) return err.toJSON();
   if (err instanceof Error) {
     const code = (err.message === 'NOT_A_GIT_REPO'
       ? 'NOT_A_GIT_REPO'
@@ -636,6 +652,81 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     safe(async (_e, jobPath: string, branch: string) => {
       const cfg = requireJenkins();
       await triggerJenkinsBuild(cfg, jobPath, branch);
+    })
+  );
+
+  // Vercel integration ----------------------------------------------------
+  ipcMain.handle(
+    'vercel:config:get',
+    safe(async (): Promise<VercelConfig> => getVercelConfig())
+  );
+
+  ipcMain.handle(
+    'vercel:config:setToken',
+    safe(async (_e, token: string | null) => {
+      setVercelToken(token);
+    })
+  );
+
+  ipcMain.handle(
+    'vercel:config:setTeamId',
+    safe(async (_e, teamId: string | null) => {
+      setVercelTeamId(teamId);
+    })
+  );
+
+  ipcMain.handle(
+    'vercel:config:setRepo',
+    safe(async (_e, repoId: string, cfg: VercelRepoConfig | null) => {
+      setVercelRepoConfig(repoId, cfg);
+    })
+  );
+
+  ipcMain.handle(
+    'vercel:auth:test',
+    safe(
+      async (_e, override?: { token?: string; teamId?: string | null }) => {
+        const stored = getVercelConfig();
+        const token = (override?.token ?? stored.token ?? '').trim();
+        const teamId =
+          override && 'teamId' in override
+            ? override.teamId ?? null
+            : stored.teamId ?? null;
+        if (!token) {
+          throw new VercelClientError(
+            'VERCEL_NOT_CONFIGURED',
+            'A Vercel token is required.'
+          );
+        }
+        return vercelWhoami({ token, teamId });
+      }
+    )
+  );
+
+  function requireVercel() {
+    const cfg = getVercelAuthedConfig();
+    if (!cfg) {
+      throw new VercelClientError(
+        'VERCEL_NOT_CONFIGURED',
+        'Vercel is not configured. Add a token in Settings → Vercel.'
+      );
+    }
+    return cfg;
+  }
+
+  ipcMain.handle(
+    'vercel:projects:list',
+    safe(async () => {
+      const cfg = requireVercel();
+      return listVercelProjects(cfg);
+    })
+  );
+
+  ipcMain.handle(
+    'vercel:deployments:list',
+    safe(async (_e, projectId: string, branch: string, limit?: number) => {
+      const cfg = requireVercel();
+      return listBranchDeployments(cfg, projectId, branch, limit ?? 20);
     })
   );
 
