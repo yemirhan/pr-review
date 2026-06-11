@@ -41,10 +41,14 @@ New `src/renderer/components/MergeStatus.tsx`:
   | `'UNSTABLE'` | true | "Some checks failing" | attention |
   | otherwise (CLEAN, HAS_HOOKS, …) | true | none | — |
 
-- `MergeStatusIndicator` — renders the label as `text-2xs` inline text under
-  the action buttons, using existing tone tokens (`text-fg-subtle`,
-  `text-attention`, `text-danger`) and the `Spinner` component. The conflicts
-  variant is a button that switches to the Conflicts tab.
+- `MergeStatusPopover` — wraps the Merge button and shows the explanation in
+  a hover popover (CSS `group-hover`, styled like `DropdownMenuContent`; no
+  new dependency). The hover lives on the wrapper because disabled buttons
+  have pointer-events disabled. The popover shows a tone-colored headline
+  (with spinner/info/warning icon), a longer detail sentence, and — for
+  conflicts — a "View conflicting files" link that switches to the Conflicts
+  tab. Tones use existing tokens (`text-fg-subtle`, `text-attention`,
+  `text-danger`).
 
 Behavior changes bundled in:
 - Draft PRs disable the Merge button (merging a draft fails anyway).
