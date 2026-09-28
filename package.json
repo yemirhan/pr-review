@@ -1,6 +1,6 @@
 {
   "name": "pr-review",
-  "version": "0.1.0",
+  "version": "1.1.0",
   "description": "Local GitHub PR review app powered by gh CLI",
   "main": "./out/main/index.js",
   "author": "yemirhan",
@@ -58,6 +58,7 @@
   "build": {
     "appId": "com.yemirhan.pr-review",
     "productName": "PR Review",
+    "afterPack": "scripts/adhoc-sign.cjs",
     "directories": {
       "buildResources": "build",
       "output": "dist"
