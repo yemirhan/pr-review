@@ -138,7 +138,9 @@ export async function claudeComplete(p: CompleteParams): Promise<CompleteResult>
         settingSources: [],
         persistSession: false,
         includePartialMessages: true,
-        maxTurns: root ? (p.maxTurns ?? 40) : 1,
+        // Without tools a plain answer needs one turn; structured output is
+        // returned through a tool call, which needs a follow-up turn.
+        maxTurns: root ? (p.maxTurns ?? 40) : p.outputSchema ? 3 : 1,
         outputFormat: p.outputSchema ? { type: 'json_schema', schema: p.outputSchema } : undefined,
         abortController,
         env: { ...process.env, PATH: buildPathEnv() } as Record<string, string>,
@@ -197,7 +199,8 @@ export async function claudeComplete(p: CompleteParams): Promise<CompleteResult>
           costUSD = message.total_cost_usd;
           durationMs = message.duration_ms;
         } else {
-          const detail = (message as { errors?: string[] }).errors?.join('; ') ?? message.subtype;
+          const errors = (message as { errors?: string[] }).errors ?? [];
+          const detail = errors.length ? errors.join('; ') : message.subtype;
           throw new AIClientError('AI_FAILED', `Claude request failed: ${detail}`);
         }
       }
