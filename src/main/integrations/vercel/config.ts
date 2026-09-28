@@ -1,50 +1,47 @@
 import Store from 'electron-store';
-import type { VercelConfig, VercelRepoConfig } from '@shared/types';
+import { encryptSecret, readSecret } from '../../secure/secret';
+import type { VercelConfig } from '@shared/types';
 
 const store = new Store<VercelConfig>({
   name: 'integrations.vercel',
-  defaults: { token: null, teamId: null, repos: {} }
+  defaults: { token: null, teamId: null, hiddenProjects: [] }
 });
 
 export function getConfig(): VercelConfig {
+  const hidden = store.get('hiddenProjects', []);
   return {
-    token: store.get('token', null),
+    token: readSecret(
+      () => store.get('token', null),
+      (v) => store.set('token', v)
+    ),
     teamId: store.get('teamId', null),
-    repos: store.get('repos', {})
+    hiddenProjects: Array.isArray(hidden) ? hidden : []
   };
 }
 
+/** Same as getConfig() but without the token, for the renderer. */
+export function getPublicConfig(): VercelConfig {
+  const c = getConfig();
+  return { ...c, token: c.token ? '••••' : null };
+}
+
 export function setToken(token: string | null): void {
-  store.set('token', token && token.trim() ? token.trim() : null);
+  store.set('token', encryptSecret(token && token.trim() ? token.trim() : null));
 }
 
 export function setTeamId(teamId: string | null): void {
   store.set('teamId', teamId && teamId.trim() ? teamId.trim() : null);
 }
 
-export function setRepoConfig(repoId: string, cfg: VercelRepoConfig | null): void {
-  const repos = { ...store.get('repos', {}) };
-  const cleaned = (cfg?.projects ?? [])
-    .map((p) => ({
-      id: p.id,
-      label: p.label.trim(),
-      projectId: p.projectId.trim()
-    }))
-    .filter((p) => p.projectId.length > 0);
-  if (cleaned.length === 0) {
-    delete repos[repoId];
-  } else {
-    repos[repoId] = { projects: cleaned };
-  }
-  store.set('repos', repos);
+export function setProjectHidden(projectId: string, hidden: boolean): void {
+  const set = new Set(getConfig().hiddenProjects);
+  if (hidden) set.add(projectId);
+  else set.delete(projectId);
+  store.set('hiddenProjects', [...set]);
 }
 
-export function getAuthedConfig(): {
-  token: string;
-  teamId: string | null;
-  repos: Record<string, VercelRepoConfig>;
-} | null {
+export function getAuthedConfig(): { token: string; teamId: string | null; hiddenProjects: string[] } | null {
   const c = getConfig();
   if (!c.token) return null;
-  return { token: c.token, teamId: c.teamId, repos: c.repos };
+  return { token: c.token, teamId: c.teamId, hiddenProjects: c.hiddenProjects };
 }

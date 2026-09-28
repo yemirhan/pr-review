@@ -2,7 +2,7 @@ import type { PRDetail } from '@shared/types';
 
 interface BuildApplyPromptInput {
   pr: PRDetail;
-  /** The markdown review previously produced (Overview / Concerns / Suggestions). */
+  /** The review findings to apply, as markdown (see renderReviewMarkdown). */
   review: string;
 }
 
@@ -10,7 +10,7 @@ export function buildApplyPrompt({ pr, review }: BuildApplyPromptInput): string 
   return [
     'You are pairing with a developer on the PR below.',
     `The working directory is a local checkout of branch \`${pr.headRefName}\` (the PR head).`,
-    'Apply the actionable suggestions from the AI review below to the codebase.',
+    'Apply the findings from the AI review below to the codebase. Each finding names a file and line; where it includes a suggested replacement, prefer it.',
     '',
     '## Rules',
     '',

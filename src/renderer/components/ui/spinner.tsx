@@ -36,7 +36,7 @@ export function SpinnerInline({
   return (
     <span className={cn('inline-flex items-center gap-2 text-fg-muted', className)}>
       <Spinner size={size} />
-      <span className="text-2xs">{label}</span>
+      <span className="text-xs">{label}</span>
     </span>
   );
 }
@@ -44,8 +44,8 @@ export function SpinnerInline({
 export function SpinnerOverlay({ label }: { label?: string }) {
   return (
     <div className="flex-1 flex flex-col items-center justify-center gap-3 text-fg-muted animate-fade-in">
-      <Spinner size="lg" className="text-accent" />
-      {label && <span className="text-2xs text-fg-subtle">{label}</span>}
+      <Spinner size="lg" className="text-fg-subtle" />
+      {label && <span className="text-xs text-fg-subtle">{label}</span>}
     </div>
   );
 }

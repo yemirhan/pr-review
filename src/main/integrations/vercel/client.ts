@@ -3,7 +3,10 @@ import type {
   VercelAuthResult,
   VercelDeployment,
   VercelDeploymentState,
-  VercelProjectLookup
+  VercelPRDeployments,
+  VercelProjectDeployments,
+  VercelProjectLookup,
+  VercelTeam
 } from '@shared/types';
 
 const BASE = 'https://api.vercel.com';
@@ -48,7 +51,8 @@ async function call<T>(
         Authorization: `Bearer ${cfg.token}`,
         Accept: 'application/json',
         ...(rest.headers ?? {})
-      }
+      },
+      signal: rest.signal ?? AbortSignal.timeout(30_000)
     });
   } catch (err) {
     throw new VercelClientError(
@@ -99,6 +103,8 @@ function mapState(s: string | null | undefined): VercelDeploymentState {
 
 interface RawDeployment {
   uid: string;
+  name?: string;
+  projectId?: string;
   url: string;
   state?: string;
   readyState?: string;
@@ -112,6 +118,10 @@ interface RawDeployment {
     githubCommitRef?: string;
     githubCommitSha?: string;
     githubCommitMessage?: string;
+    githubOrg?: string;
+    githubRepo?: string;
+    githubCommitOrg?: string;
+    githubCommitRepo?: string;
     gitlabCommitRef?: string;
     gitlabCommitSha?: string;
     bitbucketCommitRef?: string;
@@ -163,37 +173,102 @@ export async function whoami(cfg: VercelAuthedConfig): Promise<VercelAuthResult>
   };
 }
 
-export async function listProjects(
-  cfg: VercelAuthedConfig
-): Promise<VercelProjectLookup[]> {
-  const res = await call<{ projects?: Array<{ id: string; name: string; framework?: string }> }>(
-    cfg,
-    '/v9/projects?limit=100'
+export async function listTeams(cfg: VercelAuthedConfig): Promise<VercelTeam[]> {
+  // Teams are listed regardless of the configured team scope.
+  const res = await call<{ teams?: Array<{ id: string; slug: string; name?: string }> }>(
+    { ...cfg, teamId: null },
+    '/v2/teams?limit=100'
   );
-  return (res.projects ?? []).map((p) => ({
-    id: p.id,
-    name: p.name,
-    framework: p.framework ?? null
-  }));
+  return (res.teams ?? []).map((t) => ({ id: t.id, slug: t.slug, name: t.name || t.slug }));
+}
+
+interface RawProject {
+  id: string;
+  name: string;
+  framework?: string | null;
+  rootDirectory?: string | null;
+  link?: { type?: string; org?: string; repo?: string; repoOwner?: string; repoSlug?: string } | null;
+}
+
+let projectsCache: { key: string; at: number; projects: VercelProjectLookup[] } | null = null;
+
+/** Every project in the account/team, with the Git repo it's linked to. */
+export async function listProjects(cfg: VercelAuthedConfig, fresh = false): Promise<VercelProjectLookup[]> {
+  const key = `${cfg.teamId ?? ''}|${cfg.token.slice(-6)}`;
+  if (!fresh && projectsCache?.key === key && Date.now() - projectsCache.at < 5 * 60_000) {
+    return projectsCache.projects;
+  }
+  const out: VercelProjectLookup[] = [];
+  let until: number | null = null;
+  for (let page = 0; page < 20; page++) {
+    const res: { projects?: RawProject[]; pagination?: { next?: number | null } } = await call(
+      cfg,
+      `/v9/projects?limit=100${until ? `&until=${until}` : ''}`
+    );
+    for (const p of res.projects ?? []) {
+      const owner = p.link?.org ?? p.link?.repoOwner;
+      const repo = p.link?.repo ?? p.link?.repoSlug;
+      out.push({
+        id: p.id,
+        name: p.name,
+        framework: p.framework ?? null,
+        repo: owner && repo ? `${owner}/${repo}` : null,
+        rootDirectory: p.rootDirectory ?? null
+      });
+    }
+    until = res.pagination?.next ?? null;
+    if (!until) break;
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  projectsCache = { key, at: Date.now(), projects: out };
+  return out;
+}
+
+function isInProgress(s: VercelDeploymentState): boolean {
+  return s === 'BUILDING' || s === 'INITIALIZING' || s === 'QUEUED';
 }
 
 /**
- * List preview deployments for a project on a branch. Vercel's deployments
- * endpoint doesn't have a stable ref filter across providers, so we fetch the
- * most recent N preview deployments for the project and filter client-side by
- * the branch metadata.
+ * Deployments of a PR's branch across every project linked to the repo, in
+ * one request: Vercel filters by branch server-side, then deployments are
+ * grouped per project, preferring the one for the PR's head commit.
  */
-export async function listBranchDeployments(
+export async function prDeployments(
   cfg: VercelAuthedConfig,
-  projectId: string,
-  branch: string,
-  limit = 20
-): Promise<VercelDeployment[]> {
+  input: { owner: string; name: string; branch: string; headSha: string; hidden: string[] }
+): Promise<VercelPRDeployments> {
   const res = await call<{ deployments?: RawDeployment[] }>(
     cfg,
-    `/v6/deployments?projectId=${encodeURIComponent(projectId)}&target=preview&limit=${Math.min(100, Math.max(limit * 3, 30))}`
+    `/v6/deployments?branch=${encodeURIComponent(input.branch)}&limit=100`
   );
-  const all = (res.deployments ?? []).map(mapDeployment);
-  const filtered = all.filter((d) => d.branch === branch);
-  return filtered.slice(0, limit);
+  const owner = input.owner.toLowerCase();
+  const name = input.name.toLowerCase();
+  const byProject = new Map<string, { name: string; list: VercelDeployment[] }>();
+  for (const raw of res.deployments ?? []) {
+    const org = (raw.meta?.githubCommitOrg ?? raw.meta?.githubOrg ?? '').toLowerCase();
+    const repo = (raw.meta?.githubCommitRepo ?? raw.meta?.githubRepo ?? '').toLowerCase();
+    // Deployments from other repos can share a branch name.
+    if (org && repo && (org !== owner || repo !== name)) continue;
+    const pid = raw.projectId ?? raw.name ?? raw.uid;
+    const entry = byProject.get(pid) ?? { name: raw.name ?? pid, list: [] };
+    entry.list.push(mapDeployment(raw));
+    byProject.set(pid, entry);
+  }
+  const hidden = new Set(input.hidden);
+  let hiddenCount = 0;
+  const projects: VercelProjectDeployments[] = [];
+  for (const [projectId, { name: projectName, list }] of byProject) {
+    if (hidden.has(projectId)) {
+      hiddenCount++;
+      continue;
+    }
+    list.sort((a, b) => b.createdAt - a.createdAt);
+    const head = list.find((d) => d.commitSha === input.headSha);
+    const latest = head ?? list[0];
+    projects.push({ projectId, projectName, latest, atHead: !!head, history: list.slice(0, 10) });
+  }
+  const rank = (p: VercelProjectDeployments) =>
+    p.latest.state === 'ERROR' ? 0 : isInProgress(p.latest.state) ? 1 : p.latest.state === 'READY' ? 2 : 3;
+  projects.sort((a, b) => rank(a) - rank(b) || a.projectName.localeCompare(b.projectName));
+  return { projects, hidden: hiddenCount };
 }

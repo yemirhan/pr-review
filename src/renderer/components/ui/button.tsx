@@ -3,24 +3,23 @@ import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from '../../lib/cn';
 
 const buttonVariants = cva(
-  'inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:pointer-events-none disabled:opacity-50',
+  'inline-flex shrink-0 select-none items-center justify-center gap-1.5 whitespace-nowrap rounded-md border text-[13px] font-medium leading-none transition-colors duration-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50',
   {
     variants: {
       variant: {
-        primary:
-          'bg-accent text-fg-onAccent hover:bg-accent-emphasis shadow-sm',
-        secondary:
-          'bg-canvas-inset text-fg border border-border-muted hover:bg-canvas-subtle hover:border-border',
-        ghost: 'text-fg-muted hover:bg-canvas-subtle hover:text-fg',
-        danger: 'bg-danger text-fg-onAccent hover:bg-danger-emphasis shadow-sm',
-        outline:
-          'border border-border-muted bg-transparent text-fg hover:bg-canvas-subtle hover:border-border'
+        primary: 'border-transparent bg-accent-emphasis text-fg-onAccent enabled:hover:brightness-110',
+        secondary: 'border-border bg-canvas-subtle text-fg enabled:hover:bg-border-muted',
+        ghost:
+          'border-transparent bg-transparent text-fg-muted enabled:hover:bg-canvas-subtle enabled:hover:text-fg',
+        danger:
+          'border-border bg-canvas-subtle text-danger enabled:hover:border-danger/40 enabled:hover:bg-danger/10',
+        outline: 'border-border bg-transparent text-fg enabled:hover:bg-canvas-subtle'
       },
       size: {
-        sm: 'h-7 px-2.5 text-2xs',
-        md: 'h-9 px-3.5',
-        lg: 'h-10 px-5',
-        icon: 'h-8 w-8'
+        sm: 'h-6 px-2 text-xs',
+        md: 'h-7 px-3',
+        lg: 'h-8 px-3.5',
+        icon: 'h-7 w-7 px-0'
       }
     },
     defaultVariants: { variant: 'secondary', size: 'md' }

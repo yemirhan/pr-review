@@ -1,21 +1,49 @@
 import { dialog, ipcMain, BrowserWindow, shell } from 'electron';
 import { existsSync } from 'node:fs';
 import { GhClientError } from './gh/client';
-import { listPRs, getPR, getFiles, getComments } from './gh/prs';
+import {
+  listPRs,
+  getPR,
+  getFiles,
+  getComments,
+  getIssueComments,
+  getOpenPRCounts,
+  invalidatePR,
+  AI_CONTEXT_MAX_AGE
+} from './gh/prs';
 import { getChecks } from './gh/checks';
 import { submitReview } from './gh/review';
 import { editPRTitle } from './gh/edit';
 import { createPR, getRepoMeta, listBranches } from './gh/create';
 import { mergePR } from './gh/merge';
-import { checkoutPR } from './gh/checkout';
+import {
+  createWorkspace,
+  getWorkspace,
+  listWorkspaces,
+  removeWorkspace,
+  workspaceStatus
+} from './git/workspaces';
+import { clearReviewCache, listReviewCache } from './git/worktree';
 import { listRepos, addRepo, removeRepo, findRepo } from './repo/store';
 import { inspectRepo } from './repo/inspect';
 import { getConflicts } from './git/conflicts';
 import { detectEditors } from './editors/detect';
 import { openInEditor } from './editors/open';
 import { detectSystemTools } from './system/detect';
-import { AIClientError, chatPR, getAuthStatus, reviewPR } from './ai/client';
-import { applyPreflight, applyReview } from './ai/apply';
+import { AIClientError } from './ai/client';
+import { applyPreflight, applyReview, getAuthStatus, getDefaultDirective } from './ai/provider';
+import {
+  cancelReview,
+  getSession,
+  initSessions,
+  listSessions,
+  sendChat,
+  setDismissed,
+  startReview
+} from './ai/sessions';
+import { CLAUDE_MODELS, getAIConfig, setAIConfig } from './ai/config';
+import { listCodexModels } from './ai/codex';
+import { cancelStream, finishStream, registerStream } from './ai/cancel';
 import { commitAndPush, discardWorkingChanges } from './git/apply';
 import {
   ClickUpClientError,
@@ -27,7 +55,7 @@ import {
 } from './integrations/clickup/client';
 import {
   getApiToken,
-  getConfig as getClickUpConfig,
+  getPublicConfig as getClickUpPublicConfig,
   getRepoConfig as getClickUpRepoConfig,
   getTeamId,
   setApiToken,
@@ -38,41 +66,50 @@ import {
 import { parseTaskIdFromBranch } from './integrations/clickup/branch';
 import {
   JenkinsClientError,
+  detectJobRepos,
   getBuild as getJenkinsBuild,
+  getLogTail as getJenkinsLogTail,
   getTestReport as getJenkinsTestReport,
-  listBuilds as listJenkinsBuilds,
+  listJobs as listJenkinsJobs,
+  prBuilds as jenkinsPRBuilds,
+  stopBuild as stopJenkinsBuild,
   testAuth as testJenkinsAuth,
   triggerBuild as triggerJenkinsBuild
 } from './integrations/jenkins/client';
 import {
   getAuthedConfig as getJenkinsAuthedConfig,
   getConfig as getJenkinsConfig,
-  setBaseUrl as setJenkinsBaseUrl,
-  setCredentials as setJenkinsCredentials,
+  getPublicConfig as getJenkinsPublicConfig,
+  setConnection as setJenkinsConnection,
   setRepoConfig as setJenkinsRepoConfig
 } from './integrations/jenkins/config';
 import {
   VercelClientError,
-  listBranchDeployments,
   listProjects as listVercelProjects,
+  listTeams as listVercelTeams,
+  prDeployments as vercelPRDeployments,
   whoami as vercelWhoami
 } from './integrations/vercel/client';
 import {
   getAuthedConfig as getVercelAuthedConfig,
   getConfig as getVercelConfig,
-  setRepoConfig as setVercelRepoConfig,
+  getPublicConfig as getVercelPublicConfig,
+  setProjectHidden as setVercelProjectHidden,
   setTeamId as setVercelTeamId,
   setToken as setVercelToken
 } from './integrations/vercel/config';
 import type {
   ReviewDraft,
+  MergeOptions,
   MergeStrategy,
   Repo,
   CheckoutProgress,
   GhError,
-  AIReviewChunk,
-  AIReviewOptions,
-  AIChatRequest,
+  AIApplyProgressEvent,
+  ReviewCacheInfo,
+  AIProvider,
+  AIReviewStartOptions,
+  AIConfig,
   AIApplyProgress,
   ClickUpTask,
   ClickUpConfig,
@@ -82,8 +119,8 @@ import type {
   CreatePRInput,
   JenkinsConfig,
   JenkinsRepoConfig,
-  VercelConfig,
-  VercelRepoConfig
+  JenkinsStatus,
+  VercelConfig
 } from '@shared/types';
 
 function toErrPayload(err: unknown): GhError {
@@ -132,6 +169,14 @@ function safe<TArgs extends unknown[], TRes>(fn: (...args: TArgs) => Promise<TRe
 }
 
 export function registerIpc(getWindow: () => BrowserWindow | null): void {
+  initSessions(async (repo, num) => {
+    const [pr, files] = await Promise.all([
+      getPR(repo.owner, repo.name, num, AI_CONTEXT_MAX_AGE.detail),
+      getFiles(repo.owner, repo.name, num, AI_CONTEXT_MAX_AGE.files)
+    ]);
+    return { pr, files, clickUpTask: await tryLookupClickUpTask(pr.headRefName) };
+  });
+
   // Repos -----------------------------------------------------------------
   ipcMain.handle(
     'repos:list',
@@ -159,6 +204,21 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     safe(async (_e, id: string) => {
       removeRepo(id);
     })
+  );
+
+  ipcMain.handle(
+    'repos:reveal',
+    safe(async (_e, id: string) => {
+      const repo = findRepo(id);
+      if (!repo) throw new Error('Repo not found');
+      const err = await shell.openPath(repo.path);
+      if (err) throw new Error(err);
+    })
+  );
+
+  ipcMain.handle(
+    'repos:openCounts',
+    safe(async (): Promise<Record<string, number>> => getOpenPRCounts(listRepos()))
   );
 
   // PRs -------------------------------------------------------------------
@@ -247,11 +307,30 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   );
 
   ipcMain.handle(
+    'prs:issueComments',
+    safe(async (_e, repoId: string, num: number) => {
+      const repo = findRepo(repoId);
+      if (!repo) throw new Error('Repo not found');
+      return getIssueComments(repo.owner, repo.name, num);
+    })
+  );
+
+  ipcMain.handle(
     'prs:checks',
     safe(async (_e, repoId: string, num: number) => {
       const repo = findRepo(repoId);
       if (!repo) throw new Error('Repo not found');
       return getChecks(repo.owner, repo.name, num);
+    })
+  );
+
+  // Drop the main-process cache for a PR so the next fetch hits GitHub.
+  ipcMain.handle(
+    'prs:refresh',
+    safe(async (_e, repoId: string, num: number) => {
+      const repo = findRepo(repoId);
+      if (!repo) throw new Error('Repo not found');
+      invalidatePR(repo.owner, repo.name, num);
     })
   );
 
@@ -267,37 +346,81 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
   ipcMain.handle(
     'review:merge',
-    safe(async (_e, repoId: string, num: number, strategy: MergeStrategy) => {
+    safe(async (_e, repoId: string, num: number, strategy: MergeStrategy, opts?: MergeOptions) => {
       const repo = findRepo(repoId);
       if (!repo) throw new Error('Repo not found');
-      await mergePR(repo.owner, repo.name, num, strategy);
+      await mergePR(repo.owner, repo.name, num, strategy, opts ?? {});
     })
   );
 
+  // PR workspaces (one worktree per PR) ---------------------------------------
   ipcMain.handle(
     'review:checkout',
     safe(async (e, repoId: string, num: number) => {
       const repo = findRepo(repoId);
       if (!repo) throw new Error('Repo not found');
       const win = BrowserWindow.fromWebContents(e.sender);
-      return new Promise<{ exitCode: number }>((resolve, reject) => {
-        const send = (msg: CheckoutProgress) => {
-          win?.webContents.send('checkout:progress', msg);
-        };
-        checkoutPR(repo.path, num, {
-          onData: (channel, data) => send({ channel, data }),
-          onDone: (exitCode) => {
-            send({ channel: 'done', data: '', exitCode });
-            if (exitCode === 0) resolve({ exitCode });
-            else reject(new Error(`gh pr checkout exited with code ${exitCode}`));
-          },
-          onError: (err) => {
-            send({ channel: 'error', data: err.message });
-            reject(err);
-          }
-        });
-      });
+      const send = (msg: CheckoutProgress) => win?.webContents.send('checkout:progress', msg);
+      try {
+        const pr = await getPR(repo.owner, repo.name, num);
+        const ws = await createWorkspace(repo, pr, (data) => send({ channel: 'stdout', data }));
+        send({ channel: 'done', data: '', exitCode: 0 });
+        return ws;
+      } catch (err) {
+        const ge = err as { message?: string; stderr?: string };
+        send({ channel: 'error', data: `${ge.stderr ? `${ge.stderr}\n` : ''}${ge.message ?? String(err)}\n` });
+        send({ channel: 'done', data: '', exitCode: 1 });
+        throw err;
+      }
     })
+  );
+
+  ipcMain.handle(
+    'workspace:get',
+    safe(async (_e, repoId: string, num: number) => workspaceStatus(repoId, num))
+  );
+
+  ipcMain.handle(
+    'workspace:list',
+    safe(async () =>
+      listWorkspaces(async (repoId, num) => {
+        const repo = findRepo(repoId);
+        if (!repo) return null;
+        const pr = await getPR(repo.owner, repo.name, num, AI_CONTEXT_MAX_AGE.detail);
+        return { state: pr.state, title: pr.title };
+      })
+    )
+  );
+
+  ipcMain.handle(
+    'workspace:remove',
+    safe(async (_e, repoId: string, num: number, force?: boolean) => {
+      const repo = findRepo(repoId);
+      if (!repo) throw new Error('Repo not found');
+      return removeWorkspace(repo, num, { force: !!force });
+    })
+  );
+
+  ipcMain.handle(
+    'workspace:reveal',
+    safe(async (_e, repoId: string, num: number) => {
+      const ws = getWorkspace(repoId, num);
+      if (!ws) throw new Error('No worktree for this PR');
+      shell.showItemInFolder(ws.path);
+    })
+  );
+
+  ipcMain.handle(
+    'reviewCache:info',
+    safe(async (): Promise<ReviewCacheInfo> => {
+      const list = listReviewCache();
+      return { count: list.length, inUse: list.filter((x) => x.inUse).length };
+    })
+  );
+
+  ipcMain.handle(
+    'reviewCache:clear',
+    safe(async () => clearReviewCache())
   );
 
   ipcMain.handle(
@@ -317,10 +440,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
   ipcMain.handle(
     'editors:open',
-    safe(async (_e, editorId: string, repoId: string, relativePath?: string) => {
+    safe(async (_e, editorId: string, repoId: string, relativePath?: string, prNumber?: number) => {
       const repo = findRepo(repoId);
       if (!repo) throw new Error('Repo not found');
-      const target = relativePath ? `${repo.path}/${relativePath}` : repo.path;
+      // A PR with its own worktree opens there, not in the main checkout.
+      const root = (prNumber != null ? getWorkspace(repoId, prNumber)?.path : null) ?? repo.path;
+      const target = relativePath ? `${root}/${relativePath}` : root;
       await openInEditor(editorId, target);
     })
   );
@@ -328,62 +453,77 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   // AI review -------------------------------------------------------------
   ipcMain.handle(
     'ai:auth:status',
-    safe(async () => getAuthStatus())
+    safe(async (_e, provider?: AIProvider) => getAuthStatus(provider))
   );
 
   ipcMain.handle(
-    'ai:review',
-    safe(async (e, repoId: string, num: number, opts: AIReviewOptions, streamId: string) => {
+    'ai:config:get',
+    safe(async (): Promise<AIConfig> => getAIConfig())
+  );
+
+  ipcMain.handle(
+    'ai:config:set',
+    safe(async (_e, patch: Partial<AIConfig>): Promise<AIConfig> => setAIConfig(patch))
+  );
+
+  ipcMain.handle(
+    'ai:codex:models',
+    safe(async () => listCodexModels())
+  );
+
+  ipcMain.handle(
+    'ai:claude:models',
+    safe(async () => CLAUDE_MODELS)
+  );
+
+  ipcMain.handle(
+    'ai:directive:default',
+    safe(async () => getDefaultDirective())
+  );
+
+  ipcMain.handle(
+    'ai:session:get',
+    safe(async (_e, repoId: string, num: number) => getSession(repoId, num))
+  );
+
+  ipcMain.handle(
+    'ai:session:list',
+    safe(async () => listSessions())
+  );
+
+  ipcMain.handle(
+    'ai:session:start',
+    safe(async (_e, repoId: string, num: number, opts?: AIReviewStartOptions) => {
       const repo = findRepo(repoId);
       if (!repo) throw new Error('Repo not found');
-      const [pr, files] = await Promise.all([
-        getPR(repo.owner, repo.name, num),
-        getFiles(repo.owner, repo.name, num)
-      ]);
-      const clickUpTask = opts.includeClickUpTask
-        ? await tryLookupClickUpTask(pr.headRefName)
-        : null;
-      const win = BrowserWindow.fromWebContents(e.sender);
-      const result = await reviewPR({
-        pr,
-        files,
-        mode: opts.mode,
-        clickUpTask,
-        onChunk: (text) => {
-          const chunk: AIReviewChunk = { prNumber: num, streamId, text };
-          win?.webContents.send('ai:review:chunk', chunk);
-        }
-      });
-      return result;
+      return startReview(repo, num, opts ?? {});
     })
   );
 
   ipcMain.handle(
-    'ai:chat',
-    safe(async (e, repoId: string, num: number, req: AIChatRequest) => {
+    'ai:session:cancel',
+    safe(async (_e, repoId: string, num: number) => cancelReview(repoId, num))
+  );
+
+  ipcMain.handle(
+    'ai:session:dismiss',
+    safe(async (_e, repoId: string, num: number, findingId: string, dismissed: boolean) =>
+      setDismissed(repoId, num, findingId, dismissed)
+    )
+  );
+
+  ipcMain.handle(
+    'ai:session:chat',
+    safe(async (_e, repoId: string, num: number, message: string, findingId?: string) => {
       const repo = findRepo(repoId);
       if (!repo) throw new Error('Repo not found');
-      const [pr, files] = await Promise.all([
-        getPR(repo.owner, repo.name, num),
-        getFiles(repo.owner, repo.name, num)
-      ]);
-      const clickUpTask = req.includeClickUpTask
-        ? await tryLookupClickUpTask(pr.headRefName)
-        : null;
-      const win = BrowserWindow.fromWebContents(e.sender);
-      const result = await chatPR({
-        pr,
-        files,
-        history: req.history,
-        message: req.message,
-        clickUpTask,
-        onChunk: (text) => {
-          const chunk: AIReviewChunk = { prNumber: num, streamId: req.streamId, text };
-          win?.webContents.send('ai:review:chunk', chunk);
-        }
-      });
-      return result;
+      return sendChat(repo, num, message, findingId);
     })
+  );
+
+  ipcMain.handle(
+    'ai:cancel',
+    safe(async (_e, streamId: string) => cancelStream(streamId))
   );
 
   ipcMain.handle(
@@ -391,24 +531,27 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     safe(async (_e, repoId: string, num: number) => {
       const repo = findRepo(repoId);
       if (!repo) throw new Error('Repo not found');
-      const pr = await getPR(repo.owner, repo.name, num);
-      return applyPreflight(repo.path, pr.headRefName);
+      const ws = getWorkspace(repoId, num);
+      if (!ws) {
+        // Fixes are applied in the PR's worktree only, never the main checkout.
+        return { currentBranch: '', branchMatches: false, dirty: false };
+      }
+      const pre = await applyPreflight(ws.path, ws.branch);
+      return pre;
     })
   );
 
   ipcMain.handle(
     'ai:apply',
-    safe(async (e, repoId: string, num: number, review: string) => {
+    safe(async (e, repoId: string, num: number, review: string, streamId: string) => {
       const repo = findRepo(repoId);
       if (!repo) throw new Error('Repo not found');
       const pr = await getPR(repo.owner, repo.name, num);
-      const pre = await applyPreflight(repo.path, pr.headRefName);
-      if (!pre.branchMatches) {
-        throw new AIClientError(
-          'AI_WRONG_BRANCH',
-          `Repo is on branch "${pre.currentBranch}", but the PR head is "${pr.headRefName}". Check out the PR first.`
-        );
+      const ws = getWorkspace(repoId, num);
+      if (!ws) {
+        throw new AIClientError('AI_WRONG_BRANCH', 'Check out this PR in a worktree first.');
       }
+      const pre = await applyPreflight(ws.path, ws.branch);
       if (pre.dirty) {
         throw new AIClientError(
           'AI_WORKING_TREE_DIRTY',
@@ -416,42 +559,67 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
         );
       }
       const win = BrowserWindow.fromWebContents(e.sender);
-      return applyReview({
-        repoPath: repo.path,
-        pr,
-        review,
-        onProgress: (event: AIApplyProgress) => {
-          win?.webContents.send('ai:apply:progress', event);
-        }
-      });
+      const ac = registerStream(streamId);
+      try {
+        return await applyReview({
+          provider: getSession(repoId, num)?.provider ?? getAIConfig().provider,
+          repoPath: ws.path,
+          pr,
+          review,
+          signal: ac.signal,
+          onProgress: (event: AIApplyProgress) => {
+            const payload: AIApplyProgressEvent = { streamId, event };
+            win?.webContents.send('ai:apply:progress', payload);
+          }
+        });
+      } finally {
+        finishStream(streamId);
+      }
     })
   );
 
   ipcMain.handle(
     'ai:apply:push',
-    safe(async (_e, repoId: string, message: string) => {
+    safe(async (_e, repoId: string, num: number, message: string) => {
       const repo = findRepo(repoId);
       if (!repo) throw new Error('Repo not found');
+      const ws = getWorkspace(repoId, num);
+      if (!ws) throw new Error('This PR has no worktree');
       const trimmed = message.trim();
       if (!trimmed) throw new Error('Commit message cannot be empty');
-      await commitAndPush(repo.path, trimmed);
+      await commitAndPush(ws.path, trimmed);
     })
   );
 
   ipcMain.handle(
     'ai:apply:discard',
-    safe(async (_e, repoId: string, untrackedBefore: string[]) => {
-      const repo = findRepo(repoId);
-      if (!repo) throw new Error('Repo not found');
-      await discardWorkingChanges(repo.path, untrackedBefore ?? []);
+    safe(async (_e, repoId: string, num: number, untrackedBefore: string[]) => {
+      const ws = getWorkspace(repoId, num);
+      if (!ws) throw new Error('This PR has no worktree');
+      await discardWorkingChanges(ws.path, untrackedBefore ?? []);
     })
   );
 
   // ClickUp integration ---------------------------------------------------
   ipcMain.handle(
     'clickup:config:get',
-    safe(async (): Promise<ClickUpConfig> => getClickUpConfig())
+    safe(async (): Promise<ClickUpConfig> => getClickUpPublicConfig())
   );
+
+  ipcMain.handle(
+    'clickup:status',
+    safe(async () => {
+      const token = getApiToken();
+      if (!token) return { state: 'unconfigured' as const };
+      try {
+        const res = await whoami(token);
+        return { state: 'ok' as const, user: res.user?.username ?? 'authenticated' };
+      } catch (e) {
+        return { state: 'error' as const, message: (e as Error).message };
+      }
+    })
+  );
+
 
   ipcMain.handle(
     'clickup:config:setToken',
@@ -566,20 +734,49 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   // Jenkins integration ---------------------------------------------------
   ipcMain.handle(
     'jenkins:config:get',
-    safe(async (): Promise<JenkinsConfig> => getJenkinsConfig())
+    safe(async (): Promise<JenkinsConfig> => getJenkinsPublicConfig())
   );
 
   ipcMain.handle(
-    'jenkins:config:setBaseUrl',
-    safe(async (_e, url: string | null) => {
-      setJenkinsBaseUrl(url);
+    'jenkins:status',
+    safe(async (): Promise<JenkinsStatus> => {
+      const c = getJenkinsConfig();
+      if (!c.baseUrl || !c.username || !c.apiToken) return { state: 'unconfigured' };
+      try {
+        const res = await testJenkinsAuth({ baseUrl: c.baseUrl, username: c.username, apiToken: c.apiToken });
+        return { state: 'ok', user: res.user ?? c.username, baseUrl: c.baseUrl, username: c.username };
+      } catch (e) {
+        const err = e as JenkinsClientError;
+        return { state: 'error', code: err.code ?? 'JENKINS_FAILED', message: err.message, baseUrl: c.baseUrl, username: c.username };
+      }
+    })
+  );
+
+  /** Test and save. A null token keeps the saved one (editing just the URL). */
+  ipcMain.handle(
+    'jenkins:connect',
+    safe(async (_e, input: { baseUrl: string; username: string; apiToken: string | null }): Promise<JenkinsStatus> => {
+      const baseUrl = input.baseUrl.trim().replace(/\/+$/, '');
+      const username = input.username.trim();
+      const apiToken = (input.apiToken ?? getJenkinsConfig().apiToken ?? '').trim();
+      if (!/^https?:\/\//i.test(baseUrl)) {
+        throw new JenkinsClientError('JENKINS_NOT_CONFIGURED', 'Enter the Jenkins URL, starting with https://');
+      }
+      if (!username || !apiToken) {
+        throw new JenkinsClientError('JENKINS_NOT_CONFIGURED', 'Username and API token are both required.');
+      }
+      const res = await testJenkinsAuth({ baseUrl, username, apiToken });
+      setJenkinsConnection(baseUrl, username, apiToken);
+      return { state: 'ok', user: res.user ?? username, baseUrl, username };
     })
   );
 
   ipcMain.handle(
-    'jenkins:config:setCredentials',
-    safe(async (_e, username: string | null, apiToken: string | null) => {
-      setJenkinsCredentials(username, apiToken);
+    'jenkins:disconnect',
+    safe(async () => {
+      const c = getJenkinsConfig();
+      // Keep the URL and username so reconnecting only needs a new token.
+      setJenkinsConnection(c.baseUrl, c.username, null);
     })
   );
 
@@ -590,81 +787,103 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     })
   );
 
-  ipcMain.handle(
-    'jenkins:auth:test',
-    safe(
-      async (
-        _e,
-        override?: { baseUrl?: string; username?: string; apiToken?: string }
-      ) => {
-        const stored = getJenkinsConfig();
-        const baseUrl = (override?.baseUrl ?? stored.baseUrl ?? '').trim().replace(/\/+$/, '');
-        const username = (override?.username ?? stored.username ?? '').trim();
-        const apiToken = (override?.apiToken ?? stored.apiToken ?? '').trim();
-        if (!baseUrl || !username || !apiToken) {
-          throw new JenkinsClientError(
-            'JENKINS_NOT_CONFIGURED',
-            'Jenkins base URL, username, and API token are all required.'
-          );
-        }
-        return testJenkinsAuth({ baseUrl, username, apiToken });
-      }
-    )
-  );
-
   function requireJenkins() {
     const cfg = getJenkinsAuthedConfig();
     if (!cfg) {
       throw new JenkinsClientError(
         'JENKINS_NOT_CONFIGURED',
-        'Jenkins is not configured. Add credentials in Settings → Jenkins.'
+        'Jenkins is not connected. Connect it in Settings → Jenkins.'
       );
     }
     return cfg;
   }
 
   ipcMain.handle(
-    'jenkins:builds:list',
-    safe(async (_e, jobPath: string, branch: string, limit?: number) => {
+    'jenkins:jobs:list',
+    safe(async (_e, fresh?: boolean) => listJenkinsJobs(requireJenkins(), !!fresh))
+  );
+
+  ipcMain.handle(
+    'jenkins:jobs:detect',
+    safe(async () => {
       const cfg = requireJenkins();
-      return listJenkinsBuilds(cfg, jobPath, branch, limit ?? 20);
+      return detectJobRepos(cfg, await listJenkinsJobs(cfg));
     })
   );
 
   ipcMain.handle(
-    'jenkins:builds:get',
-    safe(async (_e, jobPath: string, branch: string, buildNumber: number) => {
+    'jenkins:pr:builds',
+    safe(async (_e, repoId: string, branch: string, prNumber: number | null, fresh?: boolean) => {
       const cfg = requireJenkins();
-      return getJenkinsBuild(cfg, jobPath, branch, buildNumber);
+      const pipelines = cfg.repos[repoId]?.pipelines ?? [];
+      return jenkinsPRBuilds(cfg, pipelines, branch, prNumber, { fresh: !!fresh });
     })
   );
 
   ipcMain.handle(
-    'jenkins:builds:tests',
-    safe(async (_e, jobPath: string, branch: string, buildNumber: number) => {
-      const cfg = requireJenkins();
-      return getJenkinsTestReport(cfg, jobPath, branch, buildNumber);
-    })
+    'jenkins:build:get',
+    safe(async (_e, buildUrl: string) => getJenkinsBuild(requireJenkins(), buildUrl))
   );
 
   ipcMain.handle(
-    'jenkins:builds:trigger',
-    safe(async (_e, jobPath: string, branch: string) => {
-      const cfg = requireJenkins();
-      await triggerJenkinsBuild(cfg, jobPath, branch);
-    })
+    'jenkins:build:tests',
+    safe(async (_e, buildUrl: string) => getJenkinsTestReport(requireJenkins(), buildUrl))
+  );
+
+  ipcMain.handle(
+    'jenkins:build:log',
+    safe(async (_e, buildUrl: string) => getJenkinsLogTail(requireJenkins(), buildUrl))
+  );
+
+  ipcMain.handle(
+    'jenkins:build:trigger',
+    safe(async (_e, branchJobUrl: string) => triggerJenkinsBuild(requireJenkins(), branchJobUrl))
+  );
+
+  ipcMain.handle(
+    'jenkins:build:stop',
+    safe(async (_e, buildUrl: string) => stopJenkinsBuild(requireJenkins(), buildUrl))
   );
 
   // Vercel integration ----------------------------------------------------
   ipcMain.handle(
     'vercel:config:get',
-    safe(async (): Promise<VercelConfig> => getVercelConfig())
+    safe(async (): Promise<VercelConfig> => getVercelPublicConfig())
+  );
+
+  /** Test and save a token; picks the only team when there's exactly one. */
+  ipcMain.handle(
+    'vercel:connect',
+    safe(async (_e, token: string) => {
+      const t = token.trim();
+      if (!t) throw new VercelClientError('VERCEL_NOT_CONFIGURED', 'Paste a Vercel token.');
+      const res = await vercelWhoami({ token: t, teamId: null });
+      setVercelToken(t);
+      const teams = await listVercelTeams({ token: t, teamId: null }).catch(() => []);
+      const current = getVercelConfig().teamId;
+      if (!teams.some((x) => x.id === current)) setVercelTeamId(teams.length === 1 ? teams[0].id : null);
+      return res;
+    })
   );
 
   ipcMain.handle(
-    'vercel:config:setToken',
-    safe(async (_e, token: string | null) => {
-      setVercelToken(token);
+    'vercel:disconnect',
+    safe(async () => {
+      setVercelToken(null);
+    })
+  );
+
+  ipcMain.handle(
+    'vercel:status',
+    safe(async () => {
+      const c = getVercelConfig();
+      if (!c.token) return { state: 'unconfigured' as const };
+      try {
+        const res = await vercelWhoami({ token: c.token, teamId: null });
+        return { state: 'ok' as const, user: res.user ?? 'authenticated' };
+      } catch (e) {
+        return { state: 'error' as const, message: (e as Error).message };
+      }
     })
   );
 
@@ -676,31 +895,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   );
 
   ipcMain.handle(
-    'vercel:config:setRepo',
-    safe(async (_e, repoId: string, cfg: VercelRepoConfig | null) => {
-      setVercelRepoConfig(repoId, cfg);
+    'vercel:config:setProjectHidden',
+    safe(async (_e, projectId: string, hidden: boolean) => {
+      setVercelProjectHidden(projectId, hidden);
     })
-  );
-
-  ipcMain.handle(
-    'vercel:auth:test',
-    safe(
-      async (_e, override?: { token?: string; teamId?: string | null }) => {
-        const stored = getVercelConfig();
-        const token = (override?.token ?? stored.token ?? '').trim();
-        const teamId =
-          override && 'teamId' in override
-            ? override.teamId ?? null
-            : stored.teamId ?? null;
-        if (!token) {
-          throw new VercelClientError(
-            'VERCEL_NOT_CONFIGURED',
-            'A Vercel token is required.'
-          );
-        }
-        return vercelWhoami({ token, teamId });
-      }
-    )
   );
 
   function requireVercel() {
@@ -708,25 +906,35 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     if (!cfg) {
       throw new VercelClientError(
         'VERCEL_NOT_CONFIGURED',
-        'Vercel is not configured. Add a token in Settings → Vercel.'
+        'Vercel is not connected. Connect it in Settings → Vercel.'
       );
     }
     return cfg;
   }
 
   ipcMain.handle(
-    'vercel:projects:list',
-    safe(async () => {
-      const cfg = requireVercel();
-      return listVercelProjects(cfg);
-    })
+    'vercel:teams:list',
+    safe(async () => listVercelTeams(requireVercel()))
   );
 
   ipcMain.handle(
-    'vercel:deployments:list',
-    safe(async (_e, projectId: string, branch: string, limit?: number) => {
+    'vercel:projects:list',
+    safe(async (_e, fresh?: boolean) => listVercelProjects(requireVercel(), !!fresh))
+  );
+
+  ipcMain.handle(
+    'vercel:pr:deployments',
+    safe(async (_e, repoId: string, branch: string, headSha: string) => {
       const cfg = requireVercel();
-      return listBranchDeployments(cfg, projectId, branch, limit ?? 20);
+      const repo = findRepo(repoId);
+      if (!repo) throw new Error('Repo not found');
+      return vercelPRDeployments(cfg, {
+        owner: repo.owner,
+        name: repo.name,
+        branch,
+        headSha,
+        hidden: cfg.hiddenProjects
+      });
     })
   );
 

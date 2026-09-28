@@ -1,4 +1,5 @@
 import Store from 'electron-store';
+import { encryptSecret, readSecret } from '../../secure/secret';
 import type { ClickUpConfig, ClickUpRepoConfig } from '@shared/types';
 
 const store = new Store<ClickUpConfig>({
@@ -8,15 +9,21 @@ const store = new Store<ClickUpConfig>({
 
 export function getConfig(): ClickUpConfig {
   return {
-    apiToken: store.get('apiToken', null),
+    apiToken: readApiToken(),
     teamId: store.get('teamId', null),
     teams: store.get('teams', []),
     repos: store.get('repos', {})
   };
 }
 
+/** Same as getConfig() but without the token, for the renderer. */
+export function getPublicConfig(): ClickUpConfig {
+  const c = getConfig();
+  return { ...c, apiToken: c.apiToken ? '••••' : null };
+}
+
 export function setApiToken(token: string | null): void {
-  store.set('apiToken', token && token.trim() ? token.trim() : null);
+  store.set('apiToken', encryptSecret(token && token.trim() ? token.trim() : null));
 }
 
 export function getTeamId(): string | null {
@@ -43,5 +50,12 @@ export function setRepoConfig(repoId: string, cfg: ClickUpRepoConfig): void {
 }
 
 export function getApiToken(): string | null {
-  return store.get('apiToken', null);
+  return readApiToken();
+}
+
+function readApiToken(): string | null {
+  return readSecret(
+    () => store.get('apiToken', null),
+    (v) => store.set('apiToken', v)
+  );
 }

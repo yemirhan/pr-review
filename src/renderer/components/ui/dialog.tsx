@@ -15,7 +15,7 @@ export const DialogOverlay = React.forwardRef<
   <DialogPrimitive.Overlay
     ref={ref}
     className={cn(
-      'fixed inset-0 z-50 bg-black/60 backdrop-blur-sm',
+      'fixed inset-0 z-50 bg-black/50 backdrop-blur-[2px]',
       'data-[state=open]:animate-fade-in',
       className
     )}
@@ -36,7 +36,7 @@ export const DialogContent = React.forwardRef<
         ref={ref}
         className={cn(
           'relative w-full max-w-lg pointer-events-auto',
-          'rounded-lg border border-border bg-canvas-overlay p-5 shadow-2xl',
+          'rounded-[10px] border border-border bg-canvas-overlay p-5 shadow-xl shadow-black/25',
           'data-[state=open]:animate-slide-up focus:outline-none',
           className
         )}
@@ -46,8 +46,8 @@ export const DialogContent = React.forwardRef<
         {showClose && (
           <DialogPrimitive.Close
             className={cn(
-              'absolute right-3 top-3 rounded-md p-1 text-fg-muted opacity-70 transition-opacity',
-              'hover:opacity-100 hover:bg-canvas-subtle focus:outline-none focus:ring-2 focus:ring-accent/40'
+              'absolute right-3 top-3 inline-flex h-7 w-7 items-center justify-center rounded-md text-fg-muted transition-colors duration-100',
+              'hover:bg-canvas-subtle hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40'
             )}
           >
             <X className="h-4 w-4" />
@@ -74,7 +74,7 @@ export const DialogTitle = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Title
     ref={ref}
-    className={cn('text-base font-semibold leading-none tracking-tight text-fg', className)}
+    className={cn('text-lg font-semibold text-fg', className)}
     {...props}
   />
 ));
@@ -86,7 +86,7 @@ export const DialogDescription = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Description
     ref={ref}
-    className={cn('text-2xs text-fg-muted', className)}
+    className={cn('text-sm text-fg-muted', className)}
     {...props}
   />
 ));

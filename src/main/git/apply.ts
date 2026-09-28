@@ -95,7 +95,14 @@ export async function commitAndPush(
     );
   }
 
-  const push = await gitWithExit(repoPath, ['push', 'origin', 'HEAD']);
+  // Push to the branch's upstream (set by `gh pr checkout`, which may be a
+  // fork and may have a different name than the local branch).
+  const branch = (await gitWithExit(repoPath, ['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim();
+  const remote = (await gitWithExit(repoPath, ['config', `branch.${branch}.remote`])).stdout.trim();
+  const merge = (await gitWithExit(repoPath, ['config', `branch.${branch}.merge`])).stdout.trim();
+  const pushArgs =
+    remote && merge ? ['push', remote, `HEAD:${merge}`] : ['push', 'origin', 'HEAD'];
+  const push = await gitWithExit(repoPath, pushArgs);
   if (push.exitCode !== 0) {
     throw new AIClientError(
       'GIT_PUSH_FAILED',

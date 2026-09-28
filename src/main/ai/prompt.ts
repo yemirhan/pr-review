@@ -1,60 +1,124 @@
 import type {
   AIChatMessage,
-  AIReviewMode,
+  AILanguage,
+  AIReviewFinding,
   ClickUpTask,
   FileDiff,
   PRDetail
 } from '@shared/types';
+import type { FileAtRef } from '../gh/contents';
+import { OUTPUT_CONTRACT } from './findings';
+import { languageHint, languageRules } from './directive';
 
 const MAX_PATCH_LINES_PER_FILE = 800;
-const MAX_TOTAL_PATCH_CHARS = 180_000;
+const MAX_TOTAL_PATCH_CHARS = 200_000;
+const MAX_CONTEXT_CHARS = 200_000;
 
-function truncatePatch(patch: string): { text: string; truncated: boolean } {
-  const lines = patch.split('\n');
-  if (lines.length <= MAX_PATCH_LINES_PER_FILE) {
-    return { text: patch, truncated: false };
-  }
-  const head = lines.slice(0, MAX_PATCH_LINES_PER_FILE).join('\n');
-  return { text: head, truncated: true };
+function pad(n: number | null, width: number): string {
+  return (n == null ? '' : String(n)).padStart(width, ' ');
 }
 
-function renderFile(f: FileDiff): string {
+/**
+ * Render a file's hunks with explicit old/new line numbers on every row so
+ * the model can anchor findings to real lines instead of counting from the
+ * hunk header (which it gets wrong constantly).
+ */
+function renderAnnotatedFile(f: FileDiff): string {
   const header =
     `### ${f.path} (${f.status}, +${f.additions}/-${f.deletions}` +
     (f.oldPath && f.oldPath !== f.path ? `, renamed from ${f.oldPath}` : '') +
-    `)`;
-  if (f.binary) return `${header}\n[binary file — not shown]`;
-  if (!f.patch) return `${header}\n[no diff available]`;
-  const { text, truncated } = truncatePatch(f.patch);
-  const suffix = truncated ? `\n[...truncated to ${MAX_PATCH_LINES_PER_FILE} lines...]` : '';
-  return `${header}\n\`\`\`diff\n${text}${suffix}\n\`\`\``;
+    ')';
+  if (f.binary) return `${header}\n[binary file, not shown]`;
+  if (f.hunks.length === 0) return `${header}\n[no diff available]`;
+
+  const rows: string[] = ['```', '  old   new'];
+  let count = 0;
+  let truncated = false;
+  outer: for (const h of f.hunks) {
+    rows.push(`@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@`);
+    for (const l of h.lines) {
+      if (count >= MAX_PATCH_LINES_PER_FILE) {
+        truncated = true;
+        break outer;
+      }
+      const marker = l.type === 'add' ? '+' : l.type === 'del' ? '-' : ' ';
+      rows.push(`${pad(l.oldNo, 5)} ${pad(l.newNo, 5)} ${marker} ${l.content}`);
+      count++;
+    }
+  }
+  if (truncated) rows.push(`[... truncated after ${MAX_PATCH_LINES_PER_FILE} lines ...]`);
+  rows.push('```');
+  return `${header}\n${rows.join('\n')}`;
 }
 
-function renderFiles(files: FileDiff[]): string {
+/** Lockfiles and generated output are noise for a reviewer. */
+function isNoise(path: string): boolean {
+  return /(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|Cargo\.lock|Podfile\.lock|Gemfile\.lock|composer\.lock)$/.test(path) ||
+    /(^|\/)(dist|build|out|\.next|generated|__generated__)\//.test(path) ||
+    /\.(snap|min\.js|map)$/.test(path);
+}
+
+/** Lower = reviewed first. Source before tests, config, locales and docs. */
+function priority(f: FileDiff): number {
+  const p = f.path;
+  if (/(^|\/)(locales?|i18n|translations?)\//.test(p) || /\.(md|mdx|txt)$/.test(p)) return 3;
+  if (/(\.|\/)(test|spec|stories)\.|__tests__\//.test(p)) return 2;
+  if (/\.(json|ya?ml|toml|lock)$/.test(p)) return 2;
+  return f.status === 'removed' ? 1 : 0;
+}
+
+function renderFiles(files: FileDiff[], hasWorkspace: boolean): string {
+  const ordered = files
+    .filter((f) => !isNoise(f.path))
+    .sort((a, b) => priority(a) - priority(b) || b.additions + b.deletions - (a.additions + a.deletions));
   const rendered: string[] = [];
-  let totalChars = 0;
-  let droppedFiles = 0;
-  for (const f of files) {
-    const block = renderFile(f);
-    if (totalChars + block.length > MAX_TOTAL_PATCH_CHARS) {
-      droppedFiles = files.length - rendered.length;
-      break;
+  const omitted: string[] = files.filter((f) => isNoise(f.path)).map((f) => f.path);
+  let total = 0;
+  for (const f of ordered) {
+    const block = renderAnnotatedFile(f);
+    if (total + block.length > MAX_TOTAL_PATCH_CHARS) {
+      omitted.push(f.path);
+      continue;
     }
     rendered.push(block);
-    totalChars += block.length;
+    total += block.length;
   }
-  const droppedNote =
-    droppedFiles > 0
-      ? `\n\n_Note: ${droppedFiles} additional file(s) omitted to keep the prompt within size limits._`
-      : '';
-  return rendered.join('\n\n') + droppedNote;
+  if (omitted.length === 0) return rendered.join('\n\n');
+  const how = hasWorkspace
+    ? 'Their diff is not printed; read them in the checkout if they matter. Findings must still anchor to printed diff lines.'
+    : 'Their diff is not printed.';
+  return (
+    rendered.join('\n\n') +
+    `\n\n_Omitted (lockfiles, generated files, or size limit): ${omitted.map((x) => `\`${x}\``).join(', ')}. ${how}_`
+  );
+}
+
+function renderFileContext(ctx: FileAtRef[]): string {
+  if (ctx.length === 0) return '';
+  const parts: string[] = [
+    '## Full file contents at the PR head (context only)',
+    '',
+    'Use these to check surrounding code before flagging something the hunk alone cannot show. Findings must still anchor to lines printed in the diff section.'
+  ];
+  let total = 0;
+  for (const f of ctx) {
+    const block = `### ${f.path}${f.truncated ? ' (truncated)' : ''}\n\`\`\`\n${f.text}\n\`\`\``;
+    if (total + block.length > MAX_CONTEXT_CHARS) {
+      parts.push('', `_Context for remaining files omitted (size limit)._`);
+      break;
+    }
+    parts.push('', block);
+    total += block.length;
+  }
+  return parts.join('\n');
 }
 
 function renderMeta(pr: PRDetail): string {
   return [
     `Title: ${pr.title}`,
     `Author: @${pr.author.login}`,
-    `Branch: ${pr.headRefName} → ${pr.baseRefName}`,
+    `Branch: ${pr.headRefName} -> ${pr.baseRefName}`,
+    `Head commit: ${pr.headRefOid}`,
     `Stats: +${pr.additions} / -${pr.deletions} across ${pr.changedFiles} files`
   ].join('\n');
 }
@@ -88,177 +152,190 @@ export function renderClickUpTask(task: ClickUpTask): string {
   return lines.join('\n');
 }
 
-interface ModeSpec {
-  intro: string;
-  format: string;
+export interface Workspace {
+  /** Absolute path of a read-only checkout of the PR head, or null. */
+  path: string | null;
+  headOid: string;
 }
 
-const MODES: Record<AIReviewMode, ModeSpec> = {
-  critique: {
-    intro: 'You are an experienced software reviewer. Critically review the GitHub pull request below.',
-    format: [
-      'Respond in GitHub-flavored markdown with exactly these three sections:',
-      '',
-      '## Overview',
-      'A short paragraph (2-4 sentences) describing what this PR does and the change in shape.',
-      '',
-      '## Concerns',
-      'Bulleted list of correctness, security, performance, or design concerns. Reference `path:line` when relevant. If nothing meaningful is wrong, write a single bullet saying so — do not invent issues.',
-      '',
-      '## Suggestions',
-      'Bulleted list of concrete suggestions or follow-ups. Skip nitpicks. If you have none, say so explicitly.',
-      '',
-      'Be specific and grounded in the diff. Do not request changes you cannot justify from the code shown.'
-    ].join('\n')
-  },
-  summary: {
-    intro:
-      'You are a senior engineer summarizing a pull request for a teammate who has not seen the code yet.',
-    format: [
-      'Respond in GitHub-flavored markdown with these sections:',
-      '',
-      '## TL;DR',
-      'One or two sentences capturing the change in plain English.',
-      '',
-      '## What changed',
-      'Bulleted list grouped by area or file. Explain WHAT changed and WHY, not a line-by-line readout.',
-      '',
-      '## How it works',
-      'A short paragraph (2-4 sentences) describing the mechanism of the change for a reviewer skimming the PR.',
-      '',
-      'No critique. No suggestions. Stay descriptive and accurate.'
-    ].join('\n')
-  },
-  recap: {
-    intro:
-      'You are writing a recap of what the author actually did in this PR — the kind of update they would post in a standup or release note.',
-    format: [
-      'Respond in GitHub-flavored markdown with these sections:',
-      '',
-      '## Done',
-      'Bulleted list of concrete accomplishments, phrased as completed work ("Added X", "Fixed Y", "Refactored Z").',
-      '',
-      '## Not done / out of scope',
-      'Bulleted list of things explicitly NOT in this PR but might be expected. If nothing, say so.',
-      '',
-      'Match the granularity of a teammate update. No code-review feedback.'
-    ].join('\n')
-  },
-  risk: {
-    intro:
-      'You are assessing the risk profile of merging this pull request. Focus on what could break.',
-    format: [
-      'Respond in GitHub-flavored markdown with these sections:',
-      '',
-      '## Risk level',
-      'One of: **low** / **medium** / **high**, plus one sentence of justification.',
-      '',
-      '## Potential failure modes',
-      'Bulleted list of specific things that could break in production, ordered by likelihood. Reference `path:line` when relevant.',
-      '',
-      '## What to watch after deploy',
-      'Bulleted list of metrics, logs, or user-facing behavior to monitor. If nothing special, say so.',
-      '',
-      'Be honest. Do not inflate risk to seem thorough.'
-    ].join('\n')
-  },
-  tests: {
-    intro:
-      'You are a test-coverage reviewer. Evaluate what tests this PR has and what it lacks.',
-    format: [
-      'Respond in GitHub-flavored markdown with these sections:',
-      '',
-      '## Coverage in this PR',
-      'Bulleted list of tests added/modified and what they cover. If none, say so.',
-      '',
-      '## Gaps',
-      'Bulleted list of scenarios that should be tested but are not. Reference `path:line` for the code that lacks coverage.',
-      '',
-      '## Suggested cases',
-      'Bulleted list of concrete test cases worth adding (inputs / expected outcomes). Skip if you suggested none above.',
-      '',
-      'Focus only on tests. No general critique.'
-    ].join('\n')
-  }
-};
+export interface PriorReview {
+  headOid: string;
+  /** Findings from the previous run that the user did not dismiss. */
+  open: AIReviewFinding[];
+  /** Findings the user dismissed: signals of what this team does not want. */
+  dismissed: AIReviewFinding[];
+}
 
-interface ReviewPromptInput {
+function renderEnvironment(ws: Workspace | null): string {
+  if (ws?.path) {
+    return [
+      '## Environment',
+      '',
+      `Your working directory is a read-only checkout of this pull request at its head commit \`${ws.headOid.slice(0, 12)}\`. Use it. Before you flag something, open the file and check the surrounding code; search for callers and usages when a signature, return shape or behavior changes; look for existing tests and for shared helpers the PR could have reused. Do not modify files. Do not ask questions; produce the final answer directly.`
+    ].join('\n');
+  }
+  return [
+    '## Environment',
+    '',
+    'You have no checkout of the repository; judge from the diff and context below only. Do not ask questions; produce the final answer directly.'
+  ].join('\n');
+}
+
+function findingLine(f: AIReviewFinding): string {
+  const loc = f.line != null ? `${f.path}:${f.startLine != null ? `${f.startLine}-` : ''}${f.line}` : f.path;
+  return `- [${f.severity}] \`${loc}\` ${f.title}: ${f.body.replace(/\s+/g, ' ').slice(0, 400)}`;
+}
+
+function renderPrior(prior: PriorReview): string {
+  const parts = [`## Previous review (at commit \`${prior.headOid.slice(0, 12)}\`)`, ''];
+  if (prior.open.length > 0) {
+    parts.push(
+      'These findings were raised before. Re-check each one against the current code: if it still applies, report it again (keep the same title); if it was fixed, drop it.',
+      '',
+      ...prior.open.map(findingLine),
+      ''
+    );
+  }
+  if (prior.dismissed.length > 0) {
+    parts.push(
+      'The user dismissed these as unwanted. Do not raise them or close variants of them again:',
+      '',
+      ...prior.dismissed.map(findingLine)
+    );
+  }
+  return parts.join('\n').trim();
+}
+
+export interface ReviewPromptInput {
   pr: PRDetail;
   files: FileDiff[];
-  mode: AIReviewMode;
   clickUpTask?: ClickUpTask | null;
+  fileContext?: FileAtRef[];
+  workspace: Workspace | null;
+  prior?: PriorReview | null;
+  directive: string;
+  language: AILanguage;
 }
 
-export function buildReviewPrompt({ pr, files, mode, clickUpTask }: ReviewPromptInput): string {
-  const spec = MODES[mode] ?? MODES.critique;
-  const parts: string[] = [
-    spec.intro,
+function prContextSections(input: {
+  pr: PRDetail;
+  files: FileDiff[];
+  clickUpTask?: ClickUpTask | null;
+  fileContext?: FileAtRef[];
+  workspace: Workspace | null;
+}): string[] {
+  const parts: string[] = ['## PR metadata', '', renderMeta(input.pr), '', renderDescription(input.pr)];
+  if (input.clickUpTask) parts.push('', renderClickUpTask(input.clickUpTask));
+  if (input.fileContext && input.fileContext.length > 0) {
+    parts.push('', renderFileContext(input.fileContext));
+  }
+  parts.push(
     '',
-    spec.format,
+    '## Diff',
+    '',
+    'Each line shows `old new marker content`. `+` added, `-` removed, blank = unchanged context. Files are ordered by review priority.',
+    '',
+    renderFiles(input.files, !!input.workspace?.path)
+  );
+  return parts;
+}
+
+export function buildReviewPrompt(input: ReviewPromptInput): string {
+  const parts = [
+    input.directive.trim(),
+    '',
+    languageRules(input.language),
+    '',
+    OUTPUT_CONTRACT,
+    '',
+    renderEnvironment(input.workspace),
     '',
     '---',
     '',
-    '## PR metadata',
-    '',
-    renderMeta(pr),
-    '',
-    renderDescription(pr)
+    ...prContextSections(input)
   ];
-
-  if (clickUpTask) {
-    parts.push('', renderClickUpTask(clickUpTask));
+  if (input.prior && (input.prior.open.length > 0 || input.prior.dismissed.length > 0)) {
+    parts.push('', '---', '', renderPrior(input.prior));
   }
-
-  parts.push('', '## Changed files', '', renderFiles(files));
+  parts.push('', '---', '', 'Now review the pull request above and respond with the JSON object only.');
   return parts.join('\n');
 }
 
-interface ChatPromptInput {
+export interface ChatPromptInput {
   pr: PRDetail;
   files: FileDiff[];
+  review: { verdict: string; findings: AIReviewFinding[]; notes: string[] } | null;
   history: AIChatMessage[];
   message: string;
+  focus?: AIReviewFinding | null;
   clickUpTask?: ClickUpTask | null;
+  workspace: Workspace | null;
+  language: AILanguage;
 }
 
+function renderReview(review: NonNullable<ChatPromptInput['review']>): string {
+  const parts = ['## Your review of this PR', '', `Verdict: ${review.verdict || '(none)'}`];
+  if (review.findings.length > 0) parts.push('', 'Findings:', ...review.findings.map(findingLine));
+  if (review.notes.length > 0) parts.push('', 'Notes:', ...review.notes.map((n) => `- ${n}`));
+  return parts.join('\n');
+}
+
+function renderFocus(f: AIReviewFinding): string {
+  return [
+    '## The user is asking about this finding',
+    '',
+    findingLine(f),
+    f.suggestion ? `\nSuggested replacement:\n\`\`\`\n${f.suggestion}\n\`\`\`` : '',
+    '',
+    'If the question is whether it is real, verify it against the code (open the file, find the callers) and say plainly if you were wrong.'
+  ].join('\n');
+}
+
+const CHAT_INTRO =
+  'You are an experienced senior engineer helping a developer review the pull request below. Answer the latest message directly and precisely, grounded in the code. Use GitHub-flavored markdown and reference `path:line` (new-side line numbers) when citing code. No preamble, no hedging.';
+
 /**
- * Multi-turn chat is fed as one prompt: PR context up top, then a transcript
- * of prior turns, then the current user message. Claude's `query()` is
- * single-turn from our side, so we serialize history into the prompt.
+ * Multi-turn chat as one prompt: PR context up top, then a transcript of
+ * prior turns, then the current user message. Used when the provider has
+ * no server-side thread to continue.
  */
-export function buildChatPrompt({
-  pr,
-  files,
-  history,
-  message,
-  clickUpTask
-}: ChatPromptInput): string {
+export function buildChatPrompt(input: ChatPromptInput): string {
   const parts: string[] = [
-    'You are an experienced software engineer helping a developer review and discuss the pull request below. Answer the user\'s latest message directly and precisely, grounded in the diff and PR context. Use GitHub-flavored markdown. Reference `path:line` when citing the diff. Keep responses focused — no preamble.',
+    CHAT_INTRO,
+    '',
+    languageHint(input.language),
+    '',
+    renderEnvironment(input.workspace),
     '',
     '---',
     '',
-    '## PR metadata',
-    '',
-    renderMeta(pr),
-    '',
-    renderDescription(pr)
+    ...prContextSections(input)
   ];
+  if (input.review) parts.push('', '---', '', renderReview(input.review));
 
-  if (clickUpTask) {
-    parts.push('', renderClickUpTask(clickUpTask));
-  }
-
-  parts.push('', '## Changed files', '', renderFiles(files));
-
-  if (history.length > 0) {
+  if (input.history.length > 0) {
     parts.push('', '---', '', '## Conversation so far', '');
-    for (const m of history) {
-      const label = m.role === 'user' ? 'User' : 'Assistant';
-      parts.push(`### ${label}`, '', m.content.trim(), '');
+    for (const m of input.history) {
+      parts.push(`### ${m.role === 'user' ? 'User' : 'Assistant'}`, '', m.content.trim(), '');
     }
   }
-
-  parts.push('', '---', '', '## Current user message', '', message.trim(), '', 'Respond to the user message above.');
+  if (input.focus) parts.push('', '---', '', renderFocus(input.focus));
+  parts.push('', '---', '', '## Current user message', '', input.message.trim(), '', 'Respond to the user message above.');
   return parts.join('\n');
+}
+
+/** Follow-up sent into an existing provider thread that already has the PR context. */
+export function buildFollowUpPrompt(
+  message: string,
+  language: AILanguage,
+  focus?: AIReviewFinding | null
+): string {
+  return [
+    focus ? renderFocus(focus) + '\n' : '',
+    '## Follow-up from the user',
+    '',
+    message.trim(),
+    '',
+    `Answer directly and precisely, grounded in the code and the conversation so far. Use GitHub-flavored markdown and reference \`path:line\` when citing code. ${languageHint(language)}`
+  ].join('\n');
 }

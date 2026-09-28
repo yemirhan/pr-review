@@ -16,6 +16,8 @@ interface Props {
   viewingFilePath?: string;
   /** Click a file row → scroll to that file in the diff. */
   onSelectFile: (path: string) => void;
+  /** AI findings per file path. */
+  findingCounts?: Map<string, number>;
 }
 
 export function FileTree({
@@ -26,7 +28,8 @@ export function FileTree({
   filesWithMatches,
   activeFilePath,
   viewingFilePath,
-  onSelectFile
+  onSelectFile,
+  findingCounts
 }: Props) {
   const tree = useMemo(() => buildFileTree(files), [files]);
 
@@ -53,7 +56,7 @@ export function FileTree({
   }
 
   return (
-    <div className="text-xs font-mono py-2 select-none">
+    <div className="text-xs py-1.5 select-none">
       {tree.children.map((node) => (
         <TreeNodeRow
           key={node.path || node.name}
@@ -68,6 +71,7 @@ export function FileTree({
           activeFilePath={activeFilePath}
           viewingFilePath={viewingFilePath}
           onSelectFile={onSelectFile}
+          findingCounts={findingCounts}
         />
       ))}
     </div>
@@ -86,6 +90,7 @@ interface RowProps {
   activeFilePath?: string;
   viewingFilePath?: string;
   onSelectFile: (path: string) => void;
+  findingCounts?: Map<string, number>;
 }
 
 function TreeNodeRow(props: RowProps) {
@@ -100,12 +105,12 @@ function DirRow({ node, depth, collapsedDirs, toggleDir, ...rest }: RowProps & {
     <>
       <button
         onClick={() => toggleDir(node.path)}
-        className="w-full flex items-center gap-1 px-2 py-0.5 hover:bg-canvas-overlay/60 text-fg-muted text-left"
+        className="w-full flex items-center gap-1 px-2 h-6 hover:bg-canvas-subtle text-fg-muted text-left"
         style={{ paddingLeft: 8 + depth * 12 }}
         title={node.path}
       >
         <span className="w-3 text-fg-subtle text-2xs">{collapsed ? '▸' : '▾'}</span>
-        <span className="truncate text-fg">{node.name}</span>
+        <span className="truncate text-fg-muted">{node.name}</span>
       </button>
       {!collapsed &&
         node.children.map((c) => (
@@ -131,8 +136,10 @@ function FileRow({
   filesWithMatches,
   activeFilePath,
   viewingFilePath,
-  onSelectFile
+  onSelectFile,
+  findingCounts
 }: RowProps & { node: Extract<TreeNode, { kind: 'file' }> }) {
+  const findings = findingCounts?.get(node.file.path) ?? 0;
   const file = node.file;
   const vKey = viewedKey(repoId, prNumber, headOid, file.path);
   const viewed = useUI((s) => !!s.viewed[vKey]);
@@ -143,13 +150,13 @@ function FileRow({
   const rowStyle = isActive
     ? 'bg-accent-subtle border-l-2 border-accent'
     : isViewing
-      ? 'bg-canvas-overlay/70 border-l-2 border-fg-subtle/50 shadow-[inset_0_0_0_1px_theme(colors.border.muted)]'
-      : 'border-l-2 border-transparent hover:bg-canvas-overlay/60';
+      ? 'bg-canvas-subtle border-l-2 border-fg-subtle/60'
+      : 'border-l-2 border-transparent hover:bg-canvas-subtle';
 
   return (
     <button
       onClick={() => onSelectFile(file.path)}
-      className={`w-full flex items-center gap-2 px-2 py-0.5 text-left transition-colors ${rowStyle}`}
+      className={`w-full flex items-center gap-2 px-2 h-6 text-left transition-colors ${rowStyle}`}
       style={{ paddingLeft: 8 + depth * 12 }}
       title={file.path}
     >
@@ -169,9 +176,13 @@ function FileRow({
           aria-label="contains search match"
         />
       )}
-      <span className="text-2xs text-fg-subtle shrink-0">
-        <span className="text-success">+{file.additions}</span>
-        <span className="text-danger">−{file.deletions}</span>
+      {findings > 0 && (
+        <span className="text-2xs text-accent tabular-nums shrink-0" title={`${findings} AI finding(s)`}>
+          ✦{findings}
+        </span>
+      )}
+      <span className="text-2xs text-fg-subtle tabular-nums shrink-0">
+        +{file.additions} −{file.deletions}
       </span>
     </button>
   );

@@ -38,7 +38,7 @@ const config: Config = {
         accent: {
           DEFAULT: v('accent'),
           emphasis: v('accent-emphasis'),
-          subtle: tint('accent-subtle', 0.15)
+          subtle: tint('accent-subtle', 0.12)
         },
         success: {
           DEFAULT: v('success'),
@@ -56,21 +56,20 @@ const config: Config = {
           subtle: tint('attention-subtle', 0.15)
         },
         diff: {
-          addBg: tint('diff-addBg', 0.15),
-          addLine: tint('diff-addLine', 0.3),
-          delBg: tint('diff-delBg', 0.1),
-          delLine: tint('diff-delLine', 0.25),
+          addBg: tint('diff-addBg', 0.08),
+          addLine: tint('diff-addLine', 0.2),
+          delBg: tint('diff-delBg', 0.08),
+          delLine: tint('diff-delLine', 0.2),
           gutter: v('diff-gutter')
         }
       },
       fontFamily: {
         sans: [
-          '"Public Sans Variable"',
           '-apple-system',
           'BlinkMacSystemFont',
-          '"Segoe UI"',
-          'Helvetica',
-          'Arial',
+          '"SF Pro Text"',
+          '"Inter"',
+          'system-ui',
           'sans-serif'
         ],
         mono: [
@@ -85,10 +84,12 @@ const config: Config = {
         ]
       },
       fontSize: {
-        '2xs': '11px',
-        xs: '12px',
-        sm: '13px',
-        base: '14px'
+        '2xs': ['11px', { lineHeight: '16px' }],
+        xs: ['12px', { lineHeight: '16px' }],
+        sm: ['13px', { lineHeight: '18px' }],
+        base: ['13px', { lineHeight: '20px' }],
+        lg: ['15px', { lineHeight: '22px' }],
+        xl: ['17px', { lineHeight: '24px' }]
       },
       transitionTimingFunction: {
         smooth: 'cubic-bezier(0.2, 0, 0, 1)'

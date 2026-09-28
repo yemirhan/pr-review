@@ -1,4 +1,5 @@
 import Store from 'electron-store';
+import { encryptSecret, readSecret } from '../../secure/secret';
 import type { JenkinsConfig, JenkinsRepoConfig } from '@shared/types';
 
 const store = new Store<JenkinsConfig>({
@@ -10,44 +11,47 @@ export function getConfig(): JenkinsConfig {
   return {
     baseUrl: store.get('baseUrl', null),
     username: store.get('username', null),
-    apiToken: store.get('apiToken', null),
+    apiToken: readSecret(
+      () => store.get('apiToken', null),
+      (v) => store.set('apiToken', v)
+    ),
     repos: store.get('repos', {})
   };
 }
 
-export function setBaseUrl(url: string | null): void {
-  const trimmed = url?.trim().replace(/\/+$/, '') ?? '';
-  store.set('baseUrl', trimmed || null);
+/** Same as getConfig() but without the token, for the renderer. */
+export function getPublicConfig(): JenkinsConfig {
+  const c = getConfig();
+  return { ...c, apiToken: c.apiToken ? '••••' : null };
 }
 
-export function setCredentials(username: string | null, apiToken: string | null): void {
+export function setConnection(baseUrl: string | null, username: string | null, apiToken: string | null): void {
+  const url = baseUrl?.trim().replace(/\/+$/, '') ?? '';
+  store.set('baseUrl', url || null);
   store.set('username', username && username.trim() ? username.trim() : null);
-  store.set('apiToken', apiToken && apiToken.trim() ? apiToken.trim() : null);
+  store.set('apiToken', encryptSecret(apiToken && apiToken.trim() ? apiToken.trim() : null));
 }
 
 export function getRepoConfig(repoId: string): JenkinsRepoConfig | null {
-  const repos = store.get('repos', {});
-  return repos[repoId] ?? null;
+  return store.get('repos', {})[repoId] ?? null;
 }
 
 export function setRepoConfig(repoId: string, cfg: JenkinsRepoConfig | null): void {
   const repos = { ...store.get('repos', {}) };
+  const seen = new Set<string>();
   const cleaned = (cfg?.pipelines ?? [])
     .map((p) => ({
       id: p.id,
       label: p.label.trim(),
       jobPath: p.jobPath.trim().replace(/^\/+|\/+$/g, '')
     }))
-    .filter((p) => p.jobPath.length > 0);
-  if (cleaned.length === 0) {
-    delete repos[repoId];
-  } else {
-    repos[repoId] = { pipelines: cleaned };
-  }
+    .filter((p) => p.jobPath.length > 0 && !seen.has(p.jobPath) && !!seen.add(p.jobPath));
+  if (cleaned.length === 0) delete repos[repoId];
+  else repos[repoId] = { pipelines: cleaned };
   store.set('repos', repos);
 }
 
-/** Returns config only if base URL + creds are all set. */
+/** Config only if base URL and credentials are all set. */
 export function getAuthedConfig(): {
   baseUrl: string;
   username: string;
@@ -56,10 +60,5 @@ export function getAuthedConfig(): {
 } | null {
   const c = getConfig();
   if (!c.baseUrl || !c.username || !c.apiToken) return null;
-  return {
-    baseUrl: c.baseUrl,
-    username: c.username,
-    apiToken: c.apiToken,
-    repos: c.repos
-  };
+  return { baseUrl: c.baseUrl, username: c.username, apiToken: c.apiToken, repos: c.repos };
 }

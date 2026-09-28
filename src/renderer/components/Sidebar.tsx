@@ -1,151 +1,144 @@
-import { useQueryClient, useQueries } from '@tanstack/react-query';
+import { useQueryClient, useQuery } from '@tanstack/react-query';
+import { useMemo, useState } from 'react';
+import { Plus, X } from 'lucide-react';
+import type { Repo } from '@shared/types';
 import { api, qk, unwrap, ApiError } from '../lib/api';
 import { useUI } from '../store/ui';
-import { useState } from 'react';
-import type { Repo } from '@shared/types';
+import { cn } from '../lib/cn';
 import { Skeleton } from './ui/skeleton';
 
-export function Sidebar({ repos, loading }: { repos: Repo[]; loading: boolean }) {
+/** Folder picker → add repo → refresh lists → select it. Shared by Sidebar and Empty. */
+export function useAddRepo() {
   const qc = useQueryClient();
-  const selectedRepoId = useUI((s) => s.selectedRepoId);
   const selectRepo = useUI((s) => s.selectRepo);
-  const [addingErr, setAddingErr] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // Fetch open-PR counts for each repo, in parallel.
-  const counts = useQueries({
-    queries: repos.map((r) => ({
-      queryKey: qk.prs(r.id),
-      queryFn: () => unwrap(api.prs.list(r.id)),
-      staleTime: 60_000
-    }))
-  });
-
-  async function onAdd() {
+  async function add() {
     setAdding(true);
-    setAddingErr(null);
+    setError(null);
     try {
       const repo = await unwrap(api.repos.add());
       if (repo) {
         await qc.invalidateQueries({ queryKey: qk.repos });
+        await qc.invalidateQueries({ queryKey: qk.openCounts });
         selectRepo(repo.id);
       }
     } catch (e) {
-      const ae = e as ApiError;
-      setAddingErr(ae.message);
+      setError(addRepoMessage(e as ApiError));
     } finally {
       setAdding(false);
     }
   }
 
+  return { add, adding, error, setError };
+}
+
+export function addRepoMessage(e: ApiError): string {
+  switch (e.code) {
+    case 'NOT_A_GIT_REPO':
+      return 'That folder is not a git repository.';
+    case 'NOT_A_GITHUB_REMOTE':
+      return 'No GitHub origin remote on this repo.';
+    case 'GH_NOT_INSTALLED':
+      return 'gh CLI not found. Install with `brew install gh`.';
+    case 'GH_NOT_AUTHENTICATED':
+      return 'gh CLI is not authenticated. Run `gh auth login` in your terminal.';
+    default:
+      return e.message;
+  }
+}
+
+export function Sidebar({ repos, loading }: { repos: Repo[]; loading: boolean }) {
+  const qc = useQueryClient();
+  const selectedRepoId = useUI((s) => s.selectedRepoId);
+  const selectRepo = useUI((s) => s.selectRepo);
+  const { add, adding, error, setError } = useAddRepo();
+
+  // One batched GraphQL request for every repo's open-PR count.
+  const countsQ = useQuery({
+    queryKey: qk.openCounts,
+    queryFn: () => unwrap(api.repos.openCounts()),
+    enabled: repos.length > 0,
+    staleTime: 2 * 60_000
+  });
+
+  const nameCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of repos) m.set(r.name, (m.get(r.name) ?? 0) + 1);
+    return m;
+  }, [repos]);
+
   async function onRemove(id: string) {
-    await unwrap(api.repos.remove(id));
-    await qc.invalidateQueries({ queryKey: qk.repos });
-    if (id === selectedRepoId) selectRepo(null);
+    try {
+      await unwrap(api.repos.remove(id));
+      await qc.invalidateQueries({ queryKey: qk.repos });
+      await qc.invalidateQueries({ queryKey: qk.openCounts });
+      if (id === selectedRepoId) selectRepo(null);
+    } catch (e) {
+      setError((e as ApiError).message);
+    }
   }
 
-  const toggleSidebar = useUI((s) => s.toggleSidebar);
-
   return (
-    <aside className="w-64 shrink-0 border-r border-border-muted bg-canvas-inset/40 flex flex-col">
-      <div className="px-3 pt-3 pb-2 flex items-center justify-between">
-        <span className="text-2xs uppercase tracking-wider text-fg-subtle font-semibold">
-          Repositories
-        </span>
-        <button
-          onClick={toggleSidebar}
-          className="btn-icon h-6 w-6"
-          title="Collapse sidebar"
-          aria-label="Collapse sidebar"
-        >
-          <ChevronLeft />
-        </button>
-      </div>
-      <div className="flex-1 overflow-y-auto px-2 pb-2 space-y-1">
-        {loading && (
-          <div className="space-y-1 px-1 animate-fade-in">
-            {Array.from({ length: 3 }).map((_, i) => (
-              <RepoRowSkeleton key={i} />
-            ))}
-          </div>
-        )}
-        {repos.map((r, i) => {
-          const c = counts[i];
-          const count = c.data?.length ?? 0;
+    <aside className="flex w-[220px] shrink-0 flex-col border-r border-border-muted">
+      <div className="px-4 pb-1.5 pt-4 text-2xs font-medium text-fg-subtle">Repositories</div>
+      <nav className="flex-1 overflow-y-auto px-2 pb-2">
+        {loading &&
+          Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="flex h-8 items-center justify-between px-2">
+              <Skeleton className="h-3.5 w-28" />
+              <Skeleton className="h-3 w-4" />
+            </div>
+          ))}
+        {repos.map((r) => {
           const selected = r.id === selectedRepoId;
+          const shared = (nameCounts.get(r.name) ?? 0) > 1;
+          const count = countsQ.data?.[r.id];
           return (
-            <button
-              key={r.id}
-              onClick={() => selectRepo(r.id)}
-              className={`group w-full text-left px-2.5 py-2 rounded-lg flex items-center justify-between transition-colors duration-100 ${
-                selected
-                  ? 'bg-accent-subtle text-fg border border-accent/40'
-                  : 'border border-transparent hover:bg-canvas-subtle text-fg-muted hover:text-fg'
-              }`}
-            >
-              <span className="flex flex-col min-w-0">
-                <span className="truncate text-sm font-medium text-fg">{r.label}</span>
-                <span className="truncate text-2xs text-fg-subtle">
-                  {r.owner}/{r.name}
+            <div key={r.id} className="group relative">
+              <button
+                onClick={() => selectRepo(r.id)}
+                title={shared ? undefined : `${r.owner}/${r.name}`}
+                aria-current={selected ? 'true' : undefined}
+                className={cn(
+                  'flex w-full items-center gap-2 rounded-md px-2 text-left transition-colors duration-100',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+                  shared ? 'py-1.5' : 'h-8',
+                  selected
+                    ? 'bg-canvas-subtle text-fg'
+                    : 'text-fg-muted hover:bg-canvas-subtle/60 hover:text-fg'
+                )}
+              >
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className={cn('truncate text-[13px]', selected && 'font-medium')}>
+                    {r.name}
+                  </span>
+                  {shared && <span className="truncate text-2xs text-fg-subtle">{r.owner}</span>}
                 </span>
-              </span>
-              <span className="flex items-center gap-1">
-                <span
-                  className={`text-2xs px-1.5 h-5 inline-flex items-center rounded-full font-medium ${
-                    count > 0
-                      ? 'bg-accent-subtle text-accent border border-accent/30'
-                      : 'bg-canvas-subtle text-fg-subtle border border-border-muted'
-                  }`}
-                >
-                  {c.isLoading ? '…' : count}
+                <span className="shrink-0 text-2xs tabular-nums text-fg-subtle group-hover:invisible group-focus-within:invisible">
+                  {count != null && count > 0 ? count : ''}
                 </span>
-                <span
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onRemove(r.id);
-                  }}
-                  className="opacity-0 group-hover:opacity-100 text-fg-subtle hover:text-danger px-1"
-                  title="Remove repo"
-                >
-                  ×
-                </span>
-              </span>
-            </button>
+              </button>
+              <button
+                onClick={() => onRemove(r.id)}
+                className="btn-icon absolute right-1 top-1/2 h-6 w-6 -translate-y-1/2 opacity-0 hover:text-danger focus-visible:opacity-100 group-hover:opacity-100"
+                title={`Remove ${r.owner}/${r.name}`}
+                aria-label={`Remove ${r.owner}/${r.name}`}
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
           );
         })}
-      </div>
-      <div className="border-t border-border-muted p-2">
-        <button onClick={onAdd} disabled={adding} className="btn w-full">
-          {adding ? 'Selecting…' : '+ Add repo'}
+      </nav>
+      <div className="px-2 pb-3 pt-1">
+        <button onClick={add} disabled={adding} className="btn-ghost w-full justify-start">
+          <Plus className="h-3.5 w-3.5" />
+          {adding ? 'Selecting…' : 'Add repository'}
         </button>
-        {addingErr && <div className="mt-2 text-2xs text-danger">{addingErr}</div>}
+        {error && <div className="mt-1.5 px-2 text-2xs text-danger">{error}</div>}
       </div>
     </aside>
-  );
-}
-
-function ChevronLeft() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
-      <path
-        d="M10 4l-4 4 4 4"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function RepoRowSkeleton() {
-  return (
-    <div className="w-full px-2.5 py-2 rounded-lg border border-transparent flex items-center justify-between gap-2">
-      <div className="flex-1 min-w-0 space-y-1.5">
-        <Skeleton className="h-3.5 w-24" />
-        <Skeleton className="h-3 w-32" />
-      </div>
-      <Skeleton className="h-5 w-6 rounded-full" />
-    </div>
   );
 }

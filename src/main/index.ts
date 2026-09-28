@@ -1,6 +1,10 @@
 import { app, BrowserWindow, shell } from 'electron';
 import { join } from 'node:path';
 import { registerIpc } from './ipc';
+import { installMenu } from './menu';
+import { loadShellPath } from './system/shellPath';
+import { shutdownAI } from './ai/provider';
+import { shutdownSessions } from './ai/sessions';
 
 const isDev = !app.isPackaged;
 
@@ -40,8 +44,12 @@ function createWindow(): void {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // Pick up the user's shell PATH so gh / codex / claude resolve the same
+  // way they do in a terminal, even when launched from the Dock.
+  await loadShellPath();
   registerIpc(() => mainWindow);
+  installMenu();
   createWindow();
 
   app.on('activate', () => {
@@ -51,4 +59,9 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('will-quit', () => {
+  shutdownSessions();
+  shutdownAI();
 });

@@ -1,5 +1,6 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { AIClientError, getAuthStatus } from './client';
+import { getAIConfig } from './config';
 import { buildPathEnv, resolveClaudeCodeCliPath, spawnClaudeCode } from './env';
 import { buildApplyPrompt, extractCommitMessage, stripCommitLine } from './applyPrompt';
 import {
@@ -15,7 +16,6 @@ import type {
   PRDetail
 } from '@shared/types';
 
-const APPLY_MODEL = 'claude-sonnet-4-6';
 const APPLY_TOOLS = ['Read', 'Edit', 'Write', 'Glob', 'Grep'];
 
 export async function applyPreflight(
@@ -92,7 +92,7 @@ export async function applyReview({
     const response = query({
       prompt,
       options: {
-        model: APPLY_MODEL,
+        model: getAIConfig().claudeModel,
         permissionMode: 'acceptEdits',
         tools: APPLY_TOOLS,
         allowedTools: APPLY_TOOLS,
@@ -138,6 +138,7 @@ export async function applyReview({
     }
   } catch (err) {
     if (err instanceof AIClientError) throw err;
+    if (signal?.aborted) throw new AIClientError('AI_CANCELLED', 'Cancelled.');
     const msg = err instanceof Error ? err.message : String(err);
     throw new AIClientError('AI_FAILED', msg);
   } finally {

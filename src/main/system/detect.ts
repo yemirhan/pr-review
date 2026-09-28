@@ -1,19 +1,9 @@
 import { spawn } from 'node:child_process';
-import { homedir } from 'node:os';
-import { delimiter, join } from 'node:path';
 import type { SystemTool, SystemToolId } from '@shared/types';
+import { pathWithFallbacks } from './shellPath';
 
 function pathEnv(): string {
-  const extra = [
-    '/opt/homebrew/bin',
-    '/usr/local/bin',
-    '/usr/bin',
-    '/bin',
-    join(homedir(), '.local/bin'),
-    join(homedir(), '.claude/local'),
-    join(homedir(), '.npm-global/bin')
-  ];
-  return [process.env.PATH ?? '', ...extra].filter(Boolean).join(delimiter);
+  return pathWithFallbacks();
 }
 
 function run(cmd: string, args: string[]): Promise<{ code: number; stdout: string }> {
@@ -79,9 +69,18 @@ const SPECS: ToolSpec[] = [
     id: 'claude',
     label: 'Claude Code',
     bin: 'claude',
-    description: 'Required for AI review and chat features.',
+    description: 'Powers AI review and chat when the Claude provider is selected.',
     installUrl: 'https://docs.claude.com/en/docs/claude-code/quickstart',
     installCommand: 'npm install -g @anthropic-ai/claude-code'
+  },
+  {
+    id: 'codex',
+    label: 'Codex CLI',
+    bin: 'codex',
+    description:
+      'Powers AI review and chat (via `codex app-server`) when the Codex provider is selected.',
+    installUrl: 'https://github.com/openai/codex',
+    installCommand: 'npm install -g @openai/codex'
   }
 ];
 

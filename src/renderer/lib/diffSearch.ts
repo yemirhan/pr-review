@@ -177,16 +177,26 @@ export function useScrollToMatch(
     if (!container) return;
 
     // Try a few times — the target may not be in the DOM yet (file just
-    // expanded, shiki tokens loading, etc.).
+    // expanded, highlighter still loading, etc.).
     let attempts = 0;
+    const headerSel = `[data-file-header="${cssEscape(match.filePath)}"]`;
+    const rowSel =
+      match.kind === 'line'
+        ? `[data-file-path="${cssEscape(match.filePath)}"] [data-hunk="${match.hunkIndex}"][data-line="${match.lineIndex}"]`
+        : null;
     function tryScroll() {
-      const sel =
-        match!.kind === 'line'
-          ? `[data-file-path="${cssEscape(match!.filePath)}"] [data-hunk="${(match as LineMatch).hunkIndex}"][data-line="${(match as LineMatch).lineIndex}"]`
-          : `[data-file-header="${cssEscape(match!.filePath)}"]`;
-      const target = container!.querySelector(sel) as HTMLElement | null;
-      if (target) {
-        target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      const el = container!;
+      // Diff rows render inside the diff library's Shadow DOM, so a row
+      // selector usually won't match; fall back to the file header (the
+      // matched line is highlighted via the library's selection instead).
+      const row = rowSel ? (el.querySelector(rowSel) as HTMLElement | null) : null;
+      if (row) {
+        row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        return;
+      }
+      const header = el.querySelector(headerSel) as HTMLElement | null;
+      if (header) {
+        header.scrollIntoView({ block: 'start', behavior: 'smooth' });
         return;
       }
       attempts++;

@@ -1,4 +1,3 @@
-@import '@fontsource-variable/public-sans';
 @import '@fontsource-variable/jetbrains-mono';
 
 @tailwind base;
@@ -8,6 +7,7 @@
 /* -------------------------------------------------------------------------- */
 /* Theme palettes — semantic tokens as space-separated RGB triples so Tailwind */
 /* can stamp them through `rgb(var(--c-name) / <alpha-value>)`.               */
+/* Neutral, low-chroma greys; colour is reserved for status + one accent.     */
 /* -------------------------------------------------------------------------- */
 
 :root {
@@ -17,81 +17,143 @@
 :root[data-theme='dark'] {
   color-scheme: dark;
 
-  --c-canvas: 13 17 23;
-  --c-canvas-inset: 1 4 9;
-  --c-canvas-subtle: 22 27 34;
-  --c-canvas-overlay: 28 33 40;
+  --c-canvas: 17 17 19; /* #111113 */
+  --c-canvas-inset: 12 12 14; /* #0c0c0e */
+  --c-canvas-subtle: 24 24 27; /* #18181b */
+  --c-canvas-overlay: 29 29 33; /* #1d1d21 */
 
-  --c-border: 48 54 61;
-  --c-border-muted: 33 38 45;
-  --c-border-subtle: 27 31 35;
+  --c-border: 42 42 47; /* #2a2a2f */
+  --c-border-muted: 34 34 38; /* #222226 */
+  --c-border-subtle: 28 28 32; /* #1c1c20 */
 
-  --c-fg: 230 237 243;
-  --c-fg-muted: 139 148 158;
-  --c-fg-subtle: 110 118 129;
+  --c-fg: 236 236 239; /* #ececef */
+  --c-fg-muted: 160 160 170; /* #a0a0aa */
+  --c-fg-subtle: 113 113 122; /* #71717a */
   --c-fg-onAccent: 255 255 255;
 
-  --c-accent: 47 129 247;
-  --c-accent-emphasis: 31 111 235;
-  --c-accent-subtle: 56 139 253;
+  --c-accent: 124 147 255; /* #7c93ff — text, links, rings */
+  --c-accent-emphasis: 84 104 232; /* #5468e8 — solid fills under white text */
+  --c-accent-subtle: 124 147 255;
 
-  --c-success: 63 185 80;
-  --c-success-emphasis: 35 134 54;
-  --c-success-subtle: 46 160 67;
+  --c-success: 79 191 127; /* #4fbf7f */
+  --c-success-emphasis: 47 153 96; /* #2f9960 */
+  --c-success-subtle: 79 191 127;
 
-  --c-danger: 248 81 73;
-  --c-danger-emphasis: 218 54 51;
-  --c-danger-subtle: 248 81 73;
+  --c-danger: 240 106 106; /* #f06a6a */
+  --c-danger-emphasis: 214 69 69; /* #d64545 */
+  --c-danger-subtle: 240 106 106;
 
-  --c-attention: 210 153 34;
-  --c-attention-emphasis: 158 106 3;
-  --c-attention-subtle: 187 128 9;
+  --c-attention: 217 164 65; /* #d9a441 */
+  --c-attention-emphasis: 168 122 34; /* #a87a22 */
+  --c-attention-subtle: 217 164 65;
 
-  --c-diff-addBg: 46 160 67;
-  --c-diff-addLine: 46 160 67;
-  --c-diff-delBg: 248 81 73;
-  --c-diff-delLine: 248 81 73;
-  --c-diff-gutter: 13 17 23;
+  --c-diff-addBg: 79 191 127;
+  --c-diff-addLine: 79 191 127;
+  --c-diff-delBg: 240 106 106;
+  --c-diff-delLine: 240 106 106;
+  --c-diff-gutter: 17 17 19;
 }
 
 :root[data-theme='light'] {
   color-scheme: light;
 
   --c-canvas: 255 255 255;
-  --c-canvas-inset: 246 248 250;
-  --c-canvas-subtle: 240 243 246;
+  --c-canvas-inset: 247 247 248; /* #f7f7f8 */
+  --c-canvas-subtle: 241 241 243; /* #f1f1f3 */
   --c-canvas-overlay: 255 255 255;
 
-  --c-border: 208 215 222;
-  --c-border-muted: 216 222 228;
-  --c-border-subtle: 234 238 242;
+  --c-border: 228 228 232; /* #e4e4e8 */
+  --c-border-muted: 236 236 239; /* #ececef */
+  --c-border-subtle: 241 241 243; /* #f1f1f3 */
 
-  --c-fg: 31 35 40;
-  --c-fg-muted: 89 99 110;
-  --c-fg-subtle: 110 119 129;
+  --c-fg: 24 24 27; /* #18181b */
+  --c-fg-muted: 91 91 102; /* #5b5b66 */
+  --c-fg-subtle: 138 138 148; /* #8a8a94 */
   --c-fg-onAccent: 255 255 255;
 
-  --c-accent: 9 105 218;
-  --c-accent-emphasis: 5 80 174;
-  --c-accent-subtle: 9 105 218;
+  --c-accent: 79 99 231; /* #4f63e7 */
+  --c-accent-emphasis: 63 81 212; /* #3f51d4 */
+  --c-accent-subtle: 79 99 231;
 
-  --c-success: 26 127 55;
-  --c-success-emphasis: 31 136 61;
-  --c-success-subtle: 26 127 55;
+  --c-success: 31 138 76; /* #1f8a4c */
+  --c-success-emphasis: 26 122 67; /* #1a7a43 */
+  --c-success-subtle: 31 138 76;
 
-  --c-danger: 207 34 46;
-  --c-danger-emphasis: 164 14 38;
-  --c-danger-subtle: 207 34 46;
+  --c-danger: 201 56 56; /* #c93838 */
+  --c-danger-emphasis: 176 46 46; /* #b02e2e */
+  --c-danger-subtle: 201 56 56;
 
-  --c-attention: 154 103 0;
-  --c-attention-emphasis: 125 78 0;
-  --c-attention-subtle: 154 103 0;
+  --c-attention: 154 106 0; /* #9a6a00 */
+  --c-attention-emphasis: 125 86 0; /* #7d5600 */
+  --c-attention-subtle: 154 106 0;
 
-  --c-diff-addBg: 40 167 69;
-  --c-diff-addLine: 40 167 69;
-  --c-diff-delBg: 255 129 130;
-  --c-diff-delLine: 255 129 130;
-  --c-diff-gutter: 246 248 250;
+  --c-diff-addBg: 31 138 76;
+  --c-diff-addLine: 31 138 76;
+  --c-diff-delBg: 201 56 56;
+  --c-diff-delLine: 201 56 56;
+  --c-diff-gutter: 255 255 255;
+}
+
+/* -------------------------------------------------------------------------- */
+/* @pierre/diffs overrides                                                     */
+/* PatchDiff renders a <diffs-container> host with a Shadow DOM. Its theme    */
+/* CSS lives in `:host` rules inside the shadow root; declarations on the     */
+/* host element from the outer document win over `:host`, and custom          */
+/* properties inherit into the shadow tree, so we tune it from here.          */
+/*                                                                            */
+/* Line backgrounds are computed inside as                                    */
+/*   color-mix(bg <mix>%, var(--diffs-bg-{addition,deletion}-override))       */
+/* with mix = 80% (dark) / 88% (light). So the override is a *mix target*,    */
+/* not the final colour: we pre-dilute it with canvas so the resulting line   */
+/* tint lands at ~8–10%.                                                       */
+/* -------------------------------------------------------------------------- */
+
+diffs-container {
+  /* Surface matches the app canvas in both themes. */
+  --diffs-dark-bg: rgb(var(--c-canvas));
+  --diffs-light-bg: rgb(var(--c-canvas));
+
+  /* Fonts */
+  --diffs-font-family: 'JetBrains Mono Variable', 'SF Mono', ui-monospace, Menlo, monospace;
+  --diffs-header-font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter',
+    system-ui, sans-serif;
+
+  /* Status colours: +/- markers and the change bars in the gutter. */
+  --diffs-addition-color-override: rgb(var(--c-success));
+  --diffs-deletion-color-override: rgb(var(--c-danger));
+  --diffs-modified-color-override: rgb(var(--c-accent));
+
+  /* Whole-line tint (mix target — see note above). Dark: 20% × 45% ≈ 9%. */
+  --diffs-bg-addition-override: color-mix(in srgb, rgb(var(--c-success)) 42%, rgb(var(--c-canvas)));
+  --diffs-bg-deletion-override: color-mix(in srgb, rgb(var(--c-danger)) 42%, rgb(var(--c-canvas)));
+
+  /* Word-level highlights: final colours, a notch stronger than the line. */
+  --diffs-bg-addition-emphasis-override: rgb(var(--c-success) / 0.22);
+  --diffs-bg-deletion-emphasis-override: rgb(var(--c-danger) / 0.24);
+
+  /* Neutral gutters: number column mixes toward canvas (no tint), numbers grey. */
+  --diffs-bg-addition-number-override: rgb(var(--c-canvas));
+  --diffs-bg-deletion-number-override: rgb(var(--c-canvas));
+  --diffs-fg-number-override: rgb(var(--c-fg-subtle));
+  --diffs-fg-number-addition-override: rgb(var(--c-fg-subtle));
+  --diffs-fg-number-deletion-override: rgb(var(--c-fg-subtle));
+
+  /* Context / hunk separators / expand buffers: quiet neutral surfaces. */
+  --diffs-bg-context-override: rgb(var(--c-canvas-subtle));
+  --diffs-bg-context-gutter-override: rgb(var(--c-canvas-subtle));
+  --diffs-bg-separator-override: rgb(var(--c-canvas-subtle));
+  --diffs-bg-buffer-override: rgb(var(--c-canvas-inset));
+}
+
+:root[data-theme='light'] diffs-container {
+  /* Light mixes 12% of the target: 12% × 70% ≈ 8%. */
+  --diffs-bg-addition-override: color-mix(in srgb, rgb(var(--c-success)) 38%, rgb(var(--c-canvas)));
+  --diffs-bg-deletion-override: color-mix(in srgb, rgb(var(--c-danger)) 36%, rgb(var(--c-canvas)));
+  /* The library mixes ~18% of this into selected lines; keep the spotlight soft. */
+  --diffs-bg-selection-override: color-mix(in srgb, rgb(var(--c-accent)) 45%, rgb(var(--c-canvas)));
+  --diffs-bg-selection-number-override: color-mix(in srgb, rgb(var(--c-accent)) 45%, rgb(var(--c-canvas)));
+  --diffs-bg-addition-emphasis-override: rgb(var(--c-success) / 0.18);
+  --diffs-bg-deletion-emphasis-override: rgb(var(--c-danger) / 0.16);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -107,9 +169,8 @@
     background: theme('colors.canvas.DEFAULT');
     color: theme('colors.fg.DEFAULT');
     font-family: theme('fontFamily.sans');
-    font-size: theme('fontSize.base');
-    font-feature-settings: 'cv11', 'ss01';
-    font-variant-numeric: tabular-nums;
+    font-size: 13px;
+    line-height: 20px;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
@@ -119,19 +180,21 @@
   }
 
   ::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
+    width: 8px;
+    height: 8px;
   }
-  ::-webkit-scrollbar-track {
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
     background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    background: theme('colors.border.DEFAULT');
-    border-radius: 6px;
-    border: 2px solid theme('colors.canvas.DEFAULT');
+    background-color: theme('colors.border.DEFAULT');
+    background-clip: padding-box;
+    border: 2px solid transparent;
+    border-radius: 999px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: theme('colors.fg.subtle');
+    background-color: theme('colors.fg.subtle');
   }
 
   button {
@@ -141,39 +204,111 @@
 }
 
 /* -------------------------------------------------------------------------- */
-/* Component classes — bigger, more comfortable buttons                       */
+/* Component classes — one control system: 28px tall, 6px radius, 13px/500.   */
+/* Utilities (h-6 w-6, px-2 …) still override these since they sit in the    */
+/* later `utilities` layer.                                                    */
 /* -------------------------------------------------------------------------- */
 
 @layer components {
-  .btn {
-    @apply inline-flex items-center justify-center gap-2 px-3.5 h-9 rounded-[10px] text-[13px] font-medium tracking-[-0.005em] border transition-colors duration-100;
-    @apply bg-canvas-subtle border-border text-fg hover:bg-canvas-overlay;
-  }
-  .btn-primary {
-    @apply inline-flex items-center justify-center gap-2 px-3.5 h-9 rounded-[10px] text-[13px] font-medium tracking-[-0.005em] border transition-colors duration-100;
-    @apply bg-success-emphasis border-success-emphasis text-fg-onAccent hover:brightness-110;
-  }
-  .btn-danger {
-    @apply inline-flex items-center justify-center gap-2 px-3.5 h-9 rounded-[10px] text-[13px] font-medium tracking-[-0.005em] border transition-colors duration-100;
-    @apply bg-danger-emphasis border-danger-emphasis text-fg-onAccent hover:brightness-110;
-  }
-  .btn-ghost {
-    @apply inline-flex items-center justify-center gap-1.5 px-2.5 h-8 rounded-lg text-[13px] font-medium tracking-[-0.005em] transition-colors duration-100;
-    @apply text-fg-muted hover:text-fg hover:bg-canvas-subtle;
-  }
+  .btn,
+  .btn-primary,
+  .btn-danger,
+  .btn-ghost,
   .btn-icon {
-    @apply inline-flex items-center justify-center h-8 w-8 rounded-lg transition-colors duration-100;
-    @apply text-fg-muted hover:text-fg hover:bg-canvas-subtle;
+    @apply inline-flex shrink-0 select-none items-center justify-center gap-1.5 whitespace-nowrap;
+    @apply h-7 rounded-md border px-3 text-[13px] font-medium leading-none;
+    @apply transition-colors duration-100;
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40;
+    @apply disabled:cursor-not-allowed disabled:opacity-50;
   }
+
+  /* Default: subtle surface + hairline border. */
+  .btn {
+    @apply border-border bg-canvas-subtle text-fg;
+    @apply enabled:hover:bg-border-muted;
+  }
+
+  /* The only loud button. */
+  .btn-primary {
+    @apply border-transparent bg-accent-emphasis text-fg-onAccent;
+    @apply enabled:hover:brightness-110;
+  }
+
+  /* Destructive, but calm until hovered. */
+  .btn-danger {
+    @apply border-border bg-canvas-subtle text-danger;
+    @apply enabled:hover:border-danger/40 enabled:hover:bg-danger/10;
+  }
+
+  .btn-ghost {
+    @apply border-transparent bg-transparent px-2 text-fg-muted;
+    @apply enabled:hover:bg-canvas-subtle enabled:hover:text-fg;
+  }
+
+  .btn-icon {
+    @apply w-7 border-transparent bg-transparent px-0 text-fg-muted;
+    @apply enabled:hover:bg-canvas-subtle enabled:hover:text-fg;
+  }
+
   .chip {
-    @apply inline-flex items-center gap-1 px-2 h-5 rounded-full text-2xs border border-border bg-canvas-subtle text-fg-muted;
+    @apply inline-flex h-5 shrink-0 items-center gap-1 whitespace-nowrap rounded-full border px-2 text-2xs font-medium leading-none;
+    @apply border-border-muted bg-canvas-subtle text-fg-muted;
   }
+
   .input {
-    @apply h-9 px-2.5 rounded-lg bg-canvas-inset border border-border text-sm text-fg placeholder:text-fg-subtle outline-none focus:border-accent transition-colors duration-100;
+    @apply h-7 rounded-md border border-border bg-canvas px-2.5 text-[13px] text-fg;
+    @apply placeholder:text-fg-subtle transition-colors duration-100;
+    @apply outline-none focus:border-accent focus:ring-2 focus:ring-accent/25;
+    @apply disabled:cursor-not-allowed disabled:opacity-50;
   }
+
+  /* Keyboard hint */
+  .kbd {
+    @apply inline-flex h-[18px] min-w-[18px] items-center justify-center rounded border border-border px-1;
+    @apply font-mono text-[11px] leading-none text-fg-subtle;
+  }
+
+  /* Segmented control: <div class="segmented"><button aria-pressed="true">… */
+  .segmented {
+    @apply inline-flex h-7 items-center gap-0.5 rounded-md border border-border-muted bg-canvas-inset p-0.5;
+  }
+  .segmented > button,
+  .segmented > [role='radio'],
+  .segmented > [role='tab'] {
+    @apply inline-flex h-full items-center justify-center gap-1 rounded px-2.5 text-xs font-medium text-fg-muted;
+    @apply transition-colors duration-100 hover:text-fg;
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40;
+    @apply disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .segmented > button[aria-pressed='true'],
+  .segmented > [aria-checked='true'],
+  .segmented > [aria-selected='true'],
+  .segmented > [data-state='on'] {
+    @apply bg-canvas-overlay text-fg shadow-sm ring-1 ring-border;
+  }
+
+  .surface {
+    @apply rounded-lg border border-border-muted bg-canvas-subtle;
+  }
+
+  .divider-v {
+    @apply inline-block h-4 w-px shrink-0 bg-border;
+  }
+
+  /* Underline tabs */
+  .tab {
+    @apply inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 border-transparent px-1;
+    @apply text-[13px] font-medium text-fg-muted transition-colors duration-100 hover:text-fg;
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40;
+  }
+  .tab[aria-selected='true'] {
+    @apply border-accent text-fg;
+  }
+
   .ring-focus {
-    @apply outline-none focus-visible:ring-2 focus-visible:ring-accent ring-offset-0;
+    @apply outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ring-offset-0;
   }
+
   .skeleton-shimmer::after {
     content: '';
     position: absolute;
@@ -181,7 +316,7 @@
     background-image: linear-gradient(
       90deg,
       transparent 0%,
-      rgb(var(--c-fg) / 0.08) 50%,
+      rgb(var(--c-fg) / 0.06) 50%,
       transparent 100%
     );
     background-size: 200% 100%;
@@ -204,4 +339,21 @@
     transition-duration: 0ms !important;
     animation-duration: 0ms !important;
   }
+}
+
+/* Set by usePanelResize while a side panel is being dragged. */
+body.is-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+body.is-resizing * {
+  cursor: col-resize !important;
+  transition: none !important;
+}
+
+/* Let the browser skip layout/paint for diff files that are off screen, so
+   width changes (panel resizing, window resizing) only reflow what's visible. */
+.diff-file {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 600px;
 }

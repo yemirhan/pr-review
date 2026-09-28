@@ -1,22 +1,10 @@
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { buildPathEnv, resolveClaudeCodeCliPath, spawnClaudeCode } from './env';
-import { buildChatPrompt, buildReviewPrompt } from './prompt';
-import type {
-  AIAuthStatus,
-  AIChatMessage,
-  AIChatResult,
-  AIReviewMode,
-  AIReviewResult,
-  ClickUpTask,
-  FileDiff,
-  GhError,
-  PRDetail
-} from '@shared/types';
-
-const REVIEW_MODEL = 'claude-sonnet-4-6';
+import { DEFAULT_CLAUDE_MODEL, getAIConfig } from './config';
+import type { AIAuthStatus, GhError } from '@shared/types';
 
 export class AIClientError extends Error implements GhError {
   code: GhError['code'];
@@ -39,55 +27,83 @@ export class AIClientError extends Error implements GhError {
  */
 export function getAuthStatus(): AIAuthStatus {
   if (process.env.ANTHROPIC_API_KEY) {
-    return { available: true, source: 'api-key' };
+    return { provider: 'claude', available: true, source: 'api-key', detail: getAIConfig().claudeModel };
   }
   const claudeDir = join(homedir(), '.claude');
   if (existsSync(claudeDir)) {
-    return { available: true, source: 'claude-code' };
+    return { provider: 'claude', available: true, source: 'claude-code', detail: getAIConfig().claudeModel };
   }
-  return { available: false, source: 'none' };
+  return {
+    provider: 'claude',
+    available: false,
+    source: 'none',
+    detail: 'Sign in with the `claude` CLI or set ANTHROPIC_API_KEY.'
+  };
 }
 
-interface ReviewParams {
-  pr: PRDetail;
-  files: FileDiff[];
-  mode: AIReviewMode;
-  clickUpTask?: ClickUpTask | null;
+export interface CompleteParams {
+  prompt: string;
+  model?: string;
+  /**
+   * Directory the agent may read (a checkout of the PR head). When set, the
+   * agent gets read-only Read/Grep/Glob confined to it; otherwise it answers
+   * from the prompt alone.
+   */
+  cwd?: string | null;
+  maxTurns?: number;
+  /** JSON schema for the final answer (structured output). */
+  outputSchema?: Record<string, unknown> | null;
+  /** Answer text (or structured-output JSON) as it streams. */
   onChunk?: (text: string) => void;
+  /** Progress lines: tool calls such as file reads and searches. */
+  onStatus?: (line: string) => void;
   signal?: AbortSignal;
 }
 
-interface ChatParams {
-  pr: PRDetail;
-  files: FileDiff[];
-  history: AIChatMessage[];
-  message: string;
-  clickUpTask?: ClickUpTask | null;
-  onChunk?: (text: string) => void;
-  signal?: AbortSignal;
+export interface CompleteResult {
+  text: string;
+  costUSD?: number;
+  durationMs?: number;
 }
 
-interface StreamDelta {
+interface StreamEvent {
   type?: string;
-  delta?: { type?: string; text?: string };
+  index?: number;
+  content_block?: { type?: string; name?: string };
+  delta?: { type?: string; text?: string; partial_json?: string };
 }
 
-function extractDeltaText(event: unknown): string {
-  const e = event as StreamDelta;
-  if (e?.type === 'content_block_delta' && e.delta?.type === 'text_delta') {
-    return e.delta.text ?? '';
+const READ_ONLY_TOOLS = ['Read', 'Grep', 'Glob'];
+
+function describeTool(name: string, input: Record<string, unknown>, cwd: string): string | null {
+  const rel = (p: unknown) => {
+    const s = typeof p === 'string' ? p : '';
+    return s.startsWith(cwd) ? s.slice(cwd.length).replace(/^\/+/, '') || '.' : s;
+  };
+  switch (name) {
+    case 'Read':
+      return `Reading ${rel(input.file_path)}`;
+    case 'Grep':
+      return `Searching for "${String(input.pattern ?? '')}"${input.path ? ` in ${rel(input.path)}` : ''}`;
+    case 'Glob':
+      return `Listing ${String(input.pattern ?? '')}`;
+    default:
+      return null;
   }
-  return '';
 }
 
-export async function reviewPR({
-  pr,
-  files,
-  mode,
-  clickUpTask,
-  onChunk,
-  signal
-}: ReviewParams): Promise<AIReviewResult> {
+function isInside(root: string, p: unknown): boolean {
+  if (typeof p !== 'string' || !p) return true;
+  const abs = resolve(root, p);
+  return abs === root || abs.startsWith(root + sep);
+}
+
+/**
+ * One completion through the Claude Agent SDK. With `cwd` the agent can
+ * explore the PR checkout read-only before answering; the answer (or the
+ * structured output) streams through `onChunk`.
+ */
+export async function claudeComplete(p: CompleteParams): Promise<CompleteResult> {
   const auth = getAuthStatus();
   if (!auth.available) {
     throw new AIClientError(
@@ -96,24 +112,34 @@ export async function reviewPR({
     );
   }
 
-  const prompt = buildReviewPrompt({ pr, files, mode, clickUpTask });
-
   const abortController = new AbortController();
   const onAbort = () => abortController.abort();
-  signal?.addEventListener('abort', onAbort);
+  p.signal?.addEventListener('abort', onAbort);
+  const root = p.cwd ? resolve(p.cwd) : null;
 
   try {
     const response = query({
-      prompt,
+      prompt: p.prompt,
       options: {
-        model: REVIEW_MODEL,
-        permissionMode: 'plan',
-        tools: [],
-        allowedTools: [],
+        model: p.model ?? DEFAULT_CLAUDE_MODEL,
+        cwd: root ?? undefined,
+        tools: root ? READ_ONLY_TOOLS : [],
+        // Every tool call goes through canUseTool, which confines reads to the checkout.
+        permissionMode: 'default',
+        canUseTool: async (toolName, input) => {
+          if (!root || !READ_ONLY_TOOLS.includes(toolName)) {
+            return { behavior: 'deny', message: 'Only read-only tools inside the PR checkout are allowed.' };
+          }
+          if (!isInside(root, input.file_path) || !isInside(root, input.path)) {
+            return { behavior: 'deny', message: 'Stay inside the PR checkout.' };
+          }
+          return { behavior: 'allow', updatedInput: input };
+        },
         settingSources: [],
         persistSession: false,
         includePartialMessages: true,
-        maxTurns: 1,
+        maxTurns: root ? (p.maxTurns ?? 40) : 1,
+        outputFormat: p.outputSchema ? { type: 'json_schema', schema: p.outputSchema } : undefined,
         abortController,
         env: { ...process.env, PATH: buildPathEnv() } as Record<string, string>,
         pathToClaudeCodeExecutable: resolveClaudeCodeCliPath(),
@@ -124,122 +150,69 @@ export async function reviewPR({
     let finalText = '';
     let costUSD: number | undefined;
     let durationMs: number | undefined;
+    // Stream text of the current turn; structured output arrives as the
+    // input JSON of a tool block, which we forward the same way.
+    let streamingBlock: 'text' | 'json' | null = null;
 
     for await (const message of response) {
       if (message.type === 'stream_event') {
-        const delta = extractDeltaText(message.event);
-        if (delta && onChunk) onChunk(delta);
+        const e = message.event as StreamEvent;
+        if (e.type === 'message_start') {
+          // A new turn; only the last turn's text is the answer.
+          streamingBlock = null;
+        } else if (e.type === 'content_block_start') {
+          const b = e.content_block;
+          if (b?.type === 'text') streamingBlock = 'text';
+          else if (b?.type === 'tool_use' && b.name && !READ_ONLY_TOOLS.includes(b.name)) streamingBlock = 'json';
+          else streamingBlock = null;
+        } else if (e.type === 'content_block_delta') {
+          if (streamingBlock === 'text' && e.delta?.type === 'text_delta' && e.delta.text) {
+            p.onChunk?.(e.delta.text);
+          } else if (streamingBlock === 'json' && e.delta?.type === 'input_json_delta' && e.delta.partial_json) {
+            p.onChunk?.(e.delta.partial_json);
+          }
+        }
         continue;
       }
-      if (message.type === 'assistant' && message.error) {
-        throw new AIClientError(
-          'AI_FAILED',
-          `Claude reported an error: ${message.error}`
-        );
+      if (message.type === 'assistant') {
+        if (message.error) {
+          throw new AIClientError('AI_FAILED', `Claude reported an error: ${message.error}`);
+        }
+        if (root) {
+          for (const block of message.message.content) {
+            if (block.type === 'tool_use') {
+              const line = describeTool(block.name, (block.input ?? {}) as Record<string, unknown>, root);
+              if (line) p.onStatus?.(line);
+            }
+          }
+        }
+        continue;
       }
       if (message.type === 'result') {
         if (message.subtype === 'success') {
-          finalText = message.result;
+          finalText =
+            message.structured_output !== undefined && message.structured_output !== null
+              ? JSON.stringify(message.structured_output)
+              : message.result;
           costUSD = message.total_cost_usd;
           durationMs = message.duration_ms;
         } else {
           const detail = (message as { errors?: string[] }).errors?.join('; ') ?? message.subtype;
-          throw new AIClientError('AI_FAILED', `Claude review failed: ${detail}`);
+          throw new AIClientError('AI_FAILED', `Claude request failed: ${detail}`);
         }
       }
     }
 
     if (!finalText.trim()) {
-      throw new AIClientError('AI_FAILED', 'Claude returned an empty review.');
+      throw new AIClientError('AI_FAILED', 'Claude returned an empty response.');
     }
-
-    return { summary: finalText, mode, costUSD, durationMs };
+    return { text: finalText, costUSD, durationMs };
   } catch (err) {
     if (err instanceof AIClientError) throw err;
+    if (p.signal?.aborted) throw new AIClientError('AI_CANCELLED', 'Cancelled.');
     const msg = err instanceof Error ? err.message : String(err);
     throw new AIClientError('AI_FAILED', msg);
   } finally {
-    signal?.removeEventListener('abort', onAbort);
-  }
-}
-
-export async function chatPR({
-  pr,
-  files,
-  history,
-  message,
-  clickUpTask,
-  onChunk,
-  signal
-}: ChatParams): Promise<AIChatResult> {
-  const auth = getAuthStatus();
-  if (!auth.available) {
-    throw new AIClientError(
-      'AI_NOT_AUTHENTICATED',
-      'Claude is not authenticated. Sign in via `claude` CLI or set ANTHROPIC_API_KEY.'
-    );
-  }
-
-  const prompt = buildChatPrompt({ pr, files, history, message, clickUpTask });
-
-  const abortController = new AbortController();
-  const onAbort = () => abortController.abort();
-  signal?.addEventListener('abort', onAbort);
-
-  try {
-    const response = query({
-      prompt,
-      options: {
-        model: REVIEW_MODEL,
-        permissionMode: 'plan',
-        tools: [],
-        allowedTools: [],
-        settingSources: [],
-        persistSession: false,
-        includePartialMessages: true,
-        maxTurns: 1,
-        abortController,
-        env: { ...process.env, PATH: buildPathEnv() } as Record<string, string>,
-        pathToClaudeCodeExecutable: resolveClaudeCodeCliPath(),
-        spawnClaudeCodeProcess: spawnClaudeCode
-      }
-    });
-
-    let finalText = '';
-    let costUSD: number | undefined;
-    let durationMs: number | undefined;
-
-    for await (const msg of response) {
-      if (msg.type === 'stream_event') {
-        const delta = extractDeltaText(msg.event);
-        if (delta && onChunk) onChunk(delta);
-        continue;
-      }
-      if (msg.type === 'assistant' && msg.error) {
-        throw new AIClientError('AI_FAILED', `Claude reported an error: ${msg.error}`);
-      }
-      if (msg.type === 'result') {
-        if (msg.subtype === 'success') {
-          finalText = msg.result;
-          costUSD = msg.total_cost_usd;
-          durationMs = msg.duration_ms;
-        } else {
-          const detail = (msg as { errors?: string[] }).errors?.join('; ') ?? msg.subtype;
-          throw new AIClientError('AI_FAILED', `Claude chat failed: ${detail}`);
-        }
-      }
-    }
-
-    if (!finalText.trim()) {
-      throw new AIClientError('AI_FAILED', 'Claude returned an empty reply.');
-    }
-
-    return { reply: finalText, costUSD, durationMs };
-  } catch (err) {
-    if (err instanceof AIClientError) throw err;
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new AIClientError('AI_FAILED', msg);
-  } finally {
-    signal?.removeEventListener('abort', onAbort);
+    p.signal?.removeEventListener('abort', onAbort);
   }
 }

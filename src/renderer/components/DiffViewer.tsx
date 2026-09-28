@@ -1,17 +1,32 @@
 import { useMemo, useState, useRef, useEffect, memo, forwardRef } from 'react';
+import { PatchDiff } from '@pierre/diffs/react';
 import type {
+  AnnotationSide,
+  DiffLineAnnotation,
+  SelectedLineRange
+} from '@pierre/diffs';
+import type {
+  AIReviewFinding,
   FileDiff,
-  DiffHunk,
   InlineCommentThread,
   DraftInlineComment
 } from '@shared/types';
-import { highlightLines } from '../lib/highlight';
 import { useUI, viewedKey } from '../store/ui';
 import type { ApiError } from '../lib/api';
-import { lineKey, type DiffMatch } from '../lib/diffSearch';
+import type { DiffMatch } from '../lib/diffSearch';
 import { Skeleton } from './ui/skeleton';
+import { FindingInline } from './ai/FindingInline';
 
 const LARGE_FILE_LINES = 1500;
+
+/** A line to spotlight (e.g. from an AI finding). `nonce` re-triggers the same target. */
+export interface DiffHighlight {
+  path: string;
+  line: number;
+  startLine?: number;
+  side: 'LEFT' | 'RIGHT';
+  nonce: number;
+}
 
 interface Props {
   loading: boolean;
@@ -21,12 +36,16 @@ interface Props {
   repoId: string;
   prNumber: number;
   headOid: string;
-  /** Map of `${filePath}:${hunkIdx}:${lineIdx}` → ranges to highlight. */
-  lineMatchMap?: Map<string, Array<{ start: number; end: number }>>;
-  /** The currently-active match (gets a stronger highlight). */
+  /** The currently-active search match (its line gets the selection highlight). */
   activeMatch?: DiffMatch;
   /** Files containing at least one match — auto-expand them. */
   filesWithMatches?: Set<string>;
+  /** External spotlight (jump-to-finding); expands the file and selects the range. */
+  highlight?: DiffHighlight | null;
+  /** AI findings to render inline (already filtered to visible ones). */
+  findings?: AIReviewFinding[];
+  /** No commenting, no viewed toggles (e.g. previewing AI-applied changes). */
+  readOnly?: boolean;
 }
 
 export const DiffViewer = forwardRef<HTMLDivElement, Props>(function DiffViewer(
@@ -38,9 +57,11 @@ export const DiffViewer = forwardRef<HTMLDivElement, Props>(function DiffViewer(
     repoId,
     prNumber,
     headOid,
-    lineMatchMap,
     activeMatch,
-    filesWithMatches
+    filesWithMatches,
+    highlight,
+    findings,
+    readOnly
   },
   ref
 ) {
@@ -70,6 +91,17 @@ export const DiffViewer = forwardRef<HTMLDivElement, Props>(function DiffViewer(
       return changed ? next : cur;
     });
   }, [filesWithMatches]);
+
+  // Force-expand the highlighted file so the spotlighted line can render.
+  useEffect(() => {
+    if (!highlight) return;
+    setCollapsedOverrides((cur) => {
+      if (cur.get(highlight.path) === false) return cur;
+      const next = new Map(cur);
+      next.set(highlight.path, false);
+      return next;
+    });
+  }, [highlight]);
 
   function setFileCollapsed(path: string, collapsed: boolean) {
     setCollapsedOverrides((cur) => {
@@ -103,8 +135,10 @@ export const DiffViewer = forwardRef<HTMLDivElement, Props>(function DiffViewer(
             headOid={headOid}
             collapsedOverride={collapsedOverrides.get(f.path)}
             onCollapsedChange={(c) => setFileCollapsed(f.path, c)}
-            lineMatchMap={lineMatchMap}
             activeMatch={activeMatch}
+            highlight={highlight && highlight.path === f.path ? highlight : null}
+            findings={findings?.filter((x) => x.path === f.path)}
+            readOnly={readOnly}
           />
         ))}
       </div>
@@ -120,8 +154,10 @@ const FilePanel = memo(function FilePanel({
   headOid,
   collapsedOverride,
   onCollapsedChange,
-  lineMatchMap,
-  activeMatch
+  activeMatch,
+  highlight,
+  findings,
+  readOnly
 }: {
   file: FileDiff;
   threads: InlineCommentThread[];
@@ -130,8 +166,10 @@ const FilePanel = memo(function FilePanel({
   headOid: string;
   collapsedOverride: boolean | undefined;
   onCollapsedChange: (collapsed: boolean) => void;
-  lineMatchMap?: Map<string, Array<{ start: number; end: number }>>;
   activeMatch?: DiffMatch;
+  highlight?: DiffHighlight | null;
+  findings?: AIReviewFinding[];
+  readOnly?: boolean;
 }) {
   const totalLines = file.hunks.reduce((acc, h) => acc + h.lines.length, 0);
 
@@ -155,6 +193,15 @@ const FilePanel = memo(function FilePanel({
     () => draft.fileComments.filter((c) => c.path === file.path),
     [draft.fileComments, file.path]
   );
+  // Findings not yet turned into drafts; anchored ones render on their line.
+  const pendingFindings = useMemo(() => {
+    const added = new Set(
+      [...draft.comments, ...draft.fileComments].filter((c) => c.uid.startsWith('ai-')).map((c) => c.uid.slice(3))
+    );
+    return (findings ?? []).filter((f) => !added.has(f.id));
+  }, [findings, draft.comments, draft.fileComments]);
+  const fileLevelFindings = pendingFindings.filter((f) => !f.anchored || f.line == null);
+  const lineFindings = pendingFindings.filter((f) => f.anchored && f.line != null);
 
   function onToggleViewed(e: React.ChangeEvent<HTMLInputElement>) {
     e.stopPropagation();
@@ -178,7 +225,7 @@ const FilePanel = memo(function FilePanel({
   return (
     <section
       data-file-path={file.path}
-      className={`rounded-md border border-border bg-canvas-subtle/40 transition-opacity ${
+      className={`diff-file rounded-md border border-border bg-canvas-subtle/40 transition-opacity ${
         viewed && collapsed ? 'opacity-70' : ''
       }`}
     >
@@ -209,6 +256,15 @@ const FilePanel = memo(function FilePanel({
             <span className="text-danger">−{file.deletions}</span>
           </span>
           <DiffBar additions={file.additions} deletions={file.deletions} />
+          {pendingFindings.length > 0 && (
+            <span
+              className="text-2xs text-accent tabular-nums"
+              title={`${pendingFindings.length} AI finding${pendingFindings.length === 1 ? '' : 's'}`}
+            >
+              ✦ {pendingFindings.length}
+            </span>
+          )}
+          {!readOnly && (<>
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -238,12 +294,16 @@ const FilePanel = memo(function FilePanel({
             />
             Viewed
           </label>
+          </>)}
         </div>
       </header>
       {!collapsed && (
         <div className="overflow-hidden rounded-b-md">
-          {(fileDrafts.length > 0 || fileComposerOpen) && (
+          {(fileDrafts.length > 0 || fileComposerOpen || fileLevelFindings.length > 0) && (
             <div className="px-3 pt-3 space-y-2 border-b border-border-muted pb-3 bg-canvas">
+              {fileLevelFindings.map((f) => (
+                <FindingInline key={f.id} finding={f} repoId={repoId} prNumber={prNumber} />
+              ))}
               {fileDrafts.map((d) => (
                 <FileCommentBubble
                   key={d.uid}
@@ -270,8 +330,12 @@ const FilePanel = memo(function FilePanel({
             <DiffBody
               file={file}
               threads={threads}
-              lineMatchMap={lineMatchMap}
               activeMatch={activeMatch}
+              highlight={highlight}
+              findings={lineFindings}
+              repoId={repoId}
+              prNumber={prNumber}
+              readOnly={readOnly}
             />
           )}
         </div>
@@ -279,6 +343,255 @@ const FilePanel = memo(function FilePanel({
     </section>
   );
 });
+
+/** Reconstruct a single-file unified patch from our parsed hunks. */
+function fileDiffToPatch(file: FileDiff): string {
+  const oldName = file.oldPath ?? file.path;
+  const oldHeader = file.status === 'added' ? '/dev/null' : `a/${oldName}`;
+  const newHeader = file.status === 'removed' ? '/dev/null' : `b/${file.path}`;
+  const out: string[] = [
+    `diff --git a/${oldName} b/${file.path}`,
+    `--- ${oldHeader}`,
+    `+++ ${newHeader}`
+  ];
+  for (const h of file.hunks) {
+    out.push(h.header);
+    for (const l of h.lines) {
+      out.push((l.type === 'add' ? '+' : l.type === 'del' ? '-' : ' ') + l.content);
+    }
+  }
+  return out.join('\n') + '\n';
+}
+
+type AnnoMeta =
+  | { kind: 'thread'; thread: InlineCommentThread }
+  | { kind: 'draft'; draft: DraftInlineComment }
+  | { kind: 'finding'; finding: AIReviewFinding }
+  | { kind: 'composer' };
+
+interface ComposerState {
+  side: AnnotationSide;
+  /** Set when the comment spans startLine..line. */
+  startLine?: number;
+  line: number;
+}
+
+function DiffBody({
+  file,
+  threads,
+  activeMatch,
+  highlight,
+  findings,
+  repoId,
+  prNumber,
+  readOnly
+}: {
+  file: FileDiff;
+  threads: InlineCommentThread[];
+  activeMatch?: DiffMatch;
+  highlight?: DiffHighlight | null;
+  findings: AIReviewFinding[];
+  repoId: string;
+  prNumber: number;
+  readOnly?: boolean;
+}) {
+  const draft = useUI((s) => s.getDraft());
+  const addDraftComment = useUI((s) => s.addDraftComment);
+  const removeDraftComment = useUI((s) => s.removeDraftComment);
+
+  const themePref = useUI((s) => s.theme);
+  const diffFontSize = useUI((s) => s.diffFontSize);
+  const diffDensity = useUI((s) => s.diffDensity);
+  const lineHeight = diffDensity === 'comfortable' ? 1.9 : 1.45;
+
+  const patch = useMemo(() => fileDiffToPatch(file), [file]);
+
+  const [composer, setComposer] = useState<ComposerState | null>(null);
+  // Range the user is currently dragging over. With `controlledSelection`
+  // the library paints nothing on its own, so we echo the in-progress range
+  // back through `selectedLines` to give live feedback before pointer-up.
+  const [dragRange, setDragRange] = useState<SelectedLineRange | null>(null);
+
+  const lineAnnotations = useMemo<DiffLineAnnotation<AnnoMeta>[]>(() => {
+    const list: DiffLineAnnotation<AnnoMeta>[] = [];
+    for (const t of threads) {
+      if (t.line == null) continue;
+      list.push({
+        side: t.side === 'LEFT' ? 'deletions' : 'additions',
+        lineNumber: t.line,
+        metadata: { kind: 'thread', thread: t }
+      });
+    }
+    if (!readOnly) {
+      for (const c of draft.comments) {
+        if (c.path !== file.path) continue;
+        list.push({
+          side: c.side === 'LEFT' ? 'deletions' : 'additions',
+          lineNumber: c.line,
+          metadata: { kind: 'draft', draft: c }
+        });
+      }
+      for (const f of findings) {
+        if (f.line == null) continue;
+        list.push({
+          side: f.side === 'LEFT' ? 'deletions' : 'additions',
+          lineNumber: f.line,
+          metadata: { kind: 'finding', finding: f }
+        });
+      }
+    }
+    if (composer) {
+      list.push({
+        side: composer.side,
+        lineNumber: composer.line,
+        metadata: { kind: 'composer' }
+      });
+    }
+    return list;
+  }, [threads, draft.comments, file.path, composer, findings, readOnly]);
+
+  // An in-progress drag wins; then, while composing, the selection shows
+  // the commented range; then a jump-to-finding spotlight; otherwise the
+  // active search match line (if it's in this file) gets the highlight.
+  const selectedLines = useMemo<SelectedLineRange | null>(() => {
+    if (dragRange) return dragRange;
+    if (composer) {
+      return {
+        start: composer.startLine ?? composer.line,
+        end: composer.line,
+        side: composer.side,
+        endSide: composer.side
+      };
+    }
+    if (highlight && highlight.line != null) {
+      const side: AnnotationSide = highlight.side === 'LEFT' ? 'deletions' : 'additions';
+      return {
+        start: highlight.startLine ?? highlight.line,
+        end: highlight.line,
+        side,
+        endSide: side
+      };
+    }
+    if (activeMatch?.kind === 'line' && activeMatch.filePath === file.path) {
+      const line = file.hunks[activeMatch.hunkIndex]?.lines[activeMatch.lineIndex];
+      if (line) {
+        const side: AnnotationSide = line.type === 'del' ? 'deletions' : 'additions';
+        const num = side === 'deletions' ? line.oldNo : line.newNo;
+        if (num != null) return { start: num, end: num, side, endSide: side };
+      }
+    }
+    return null;
+  }, [dragRange, highlight, composer, activeMatch, file]);
+
+  const options = useMemo(
+    () => ({
+      diffStyle: 'unified' as const,
+      disableFileHeader: true,
+      themeType: (themePref === 'light' ? 'light' : 'dark') as 'light' | 'dark',
+      theme: { dark: 'github-dark', light: 'github-light' },
+      enableLineSelection: !readOnly,
+      controlledSelection: true,
+      lineHoverHighlight: 'number' as const,
+      onLineNumberClick: (p: { lineNumber: number; annotationSide: AnnotationSide }) => {
+        if (!readOnly) setComposer({ side: p.annotationSide, line: p.lineNumber });
+      },
+      onLineSelectionStart: (range: SelectedLineRange | null) => setDragRange(range),
+      onLineSelectionChange: (range: SelectedLineRange | null) => setDragRange(range),
+      onLineSelectionEnd: (range: SelectedLineRange | null) => {
+        setDragRange(null);
+        if (!range) return;
+        const side = range.endSide ?? range.side ?? 'additions';
+        setComposer({
+          side,
+          startLine: range.start !== range.end ? range.start : undefined,
+          line: range.end
+        });
+      }
+    }),
+    [themePref, readOnly]
+  );
+
+  function saveComposer(body: string) {
+    if (!composer || !body.trim()) return;
+    const ghSide = composer.side === 'deletions' ? 'LEFT' : 'RIGHT';
+    addDraftComment({
+      uid: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      path: file.path,
+      line: composer.line,
+      side: ghSide,
+      startLine: composer.startLine,
+      startSide: composer.startLine != null ? ghSide : undefined,
+      body: body.trim()
+    });
+    setComposer(null);
+  }
+
+  function renderAnnotation(a: DiffLineAnnotation<AnnoMeta>) {
+    const m = a.metadata;
+    if (m.kind === 'thread') {
+      return (
+        <CommentBubble
+          author={m.thread.user.login}
+          body={m.thread.body}
+          date={m.thread.createdAt}
+        />
+      );
+    }
+    if (m.kind === 'finding') {
+      return <FindingInline finding={m.finding} repoId={repoId} prNumber={prNumber} />;
+    }
+    if (m.kind === 'draft') {
+      return (
+        <CommentBubble
+          author={m.draft.uid.startsWith('ai-') ? 'you (draft, from AI)' : 'you (draft)'}
+          body={m.draft.body}
+          rangeLabel={draftRangeLabel(m.draft)}
+          onRemove={() => removeDraftComment(m.draft.uid)}
+        />
+      );
+    }
+    return (
+      <Composer
+        rangeLabel={
+          composer && composer.startLine != null
+            ? `lines ${composer.startLine}–${composer.line}`
+            : `line ${composer?.line ?? ''}`
+        }
+        onCancel={() => setComposer(null)}
+        onSave={saveComposer}
+      />
+    );
+  }
+
+  return (
+    <div
+      className="font-mono"
+      style={
+        {
+          fontSize: `${diffFontSize}px`,
+          lineHeight,
+          '--diffs-font-size': `${diffFontSize}px`,
+          '--diffs-line-height': `${Math.round(diffFontSize * lineHeight)}px`
+        } as React.CSSProperties
+      }
+    >
+      <PatchDiff<AnnoMeta>
+        patch={patch}
+        options={options}
+        lineAnnotations={lineAnnotations}
+        selectedLines={selectedLines}
+        renderAnnotation={renderAnnotation}
+      />
+    </div>
+  );
+}
+
+function draftRangeLabel(d: DraftInlineComment): string | undefined {
+  if (d.startLine != null && d.startLine !== d.line) {
+    return `lines ${d.startLine}–${d.line}`;
+  }
+  return undefined;
+}
 
 function DiffBar({ additions, deletions }: { additions: number; deletions: number }) {
   const total = additions + deletions;
@@ -393,439 +706,6 @@ function StatusChip({ status }: { status: FileDiff['status'] }) {
   return <span className={`chip ${map[status]}`}>{status}</span>;
 }
 
-interface RowItem {
-  kind: 'hunk-header' | 'line';
-  hunkIndex: number;
-  lineIndex?: number;
-}
-
-interface SelectionRange {
-  hunkIndex: number;
-  anchorIdx: number;
-  headIdx: number;
-}
-
-interface ComposerState {
-  hunkIndex: number;
-  startIdx: number;
-  endIdx: number;
-  body: string;
-}
-
-function DiffBody({
-  file,
-  threads,
-  lineMatchMap,
-  activeMatch
-}: {
-  file: FileDiff;
-  threads: InlineCommentThread[];
-  lineMatchMap?: Map<string, Array<{ start: number; end: number }>>;
-  activeMatch?: DiffMatch;
-}) {
-  const draft = useUI((s) => s.getDraft());
-  const addDraftComment = useUI((s) => s.addDraftComment);
-  const removeDraftComment = useUI((s) => s.removeDraftComment);
-
-  const items = useMemo<RowItem[]>(() => {
-    const rows: RowItem[] = [];
-    file.hunks.forEach((h, hi) => {
-      rows.push({ kind: 'hunk-header', hunkIndex: hi });
-      h.lines.forEach((_, li) => rows.push({ kind: 'line', hunkIndex: hi, lineIndex: li }));
-    });
-    return rows;
-  }, [file.hunks]);
-
-  const codeForHighlight = useMemo(() => {
-    const all: string[] = [];
-    file.hunks.forEach((h) => h.lines.forEach((l) => all.push(l.content)));
-    return all.join('\n');
-  }, [file.hunks]);
-
-  const themePref = useUI((s) => s.theme);
-  const shikiTheme = themePref === 'light' ? 'github-light' : 'github-dark';
-
-  const [tokens, setTokens] = useState<string[] | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    setTokens(null);
-    if (file.language === 'text' || codeForHighlight.length === 0) return;
-    highlightLines(file.language, codeForHighlight, shikiTheme)
-      .then((t) => {
-        if (!cancelled) setTokens(t);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [file.language, codeForHighlight, shikiTheme]);
-
-  const lineGlobalIndex = useMemo(() => {
-    const map: number[][] = [];
-    let counter = 0;
-    file.hunks.forEach((h, hi) => {
-      map[hi] = [];
-      h.lines.forEach((_, li) => {
-        map[hi][li] = counter++;
-      });
-    });
-    return map;
-  }, [file.hunks]);
-
-  const threadsByLine = useMemo(() => {
-    const m = new Map<number, InlineCommentThread[]>();
-    threads.forEach((t) => {
-      if (t.line == null) return;
-      const arr = m.get(t.line) ?? [];
-      arr.push(t);
-      m.set(t.line, arr);
-    });
-    return m;
-  }, [threads]);
-
-  const draftsByLine = useMemo(() => {
-    const m = new Map<number, DraftInlineComment[]>();
-    draft.comments
-      .filter((c) => c.path === file.path)
-      .forEach((c) => {
-        const arr = m.get(c.line) ?? [];
-        arr.push(c);
-        m.set(c.line, arr);
-      });
-    return m;
-  }, [draft.comments, file.path]);
-
-  const [composer, setComposer] = useState<ComposerState | null>(null);
-  const [selecting, setSelecting] = useState<SelectionRange | null>(null);
-  const lastClickRef = useRef<{ hunkIndex: number; lineIndex: number } | null>(null);
-
-  useEffect(() => {
-    if (!selecting) return;
-    function move(e: PointerEvent) {
-      const target = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
-      const row = target?.closest('[data-hunk][data-line]') as HTMLElement | null;
-      if (!row) return;
-      const h = Number(row.dataset.hunk);
-      const l = Number(row.dataset.line);
-      setSelecting((cur) => {
-        if (!cur || cur.hunkIndex !== h) return cur;
-        if (cur.headIdx === l) return cur;
-        return { ...cur, headIdx: l };
-      });
-    }
-    function up() {
-      setSelecting((cur) => {
-        if (cur) {
-          const start = Math.min(cur.anchorIdx, cur.headIdx);
-          const end = Math.max(cur.anchorIdx, cur.headIdx);
-          setComposer({ hunkIndex: cur.hunkIndex, startIdx: start, endIdx: end, body: '' });
-        }
-        return null;
-      });
-    }
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
-    return () => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-    };
-  }, [selecting]);
-
-  function onGutterPointerDown(
-    e: React.PointerEvent<HTMLElement>,
-    hunkIndex: number,
-    lineIndex: number
-  ) {
-    e.preventDefault();
-    if (e.shiftKey && lastClickRef.current && lastClickRef.current.hunkIndex === hunkIndex) {
-      const start = Math.min(lastClickRef.current.lineIndex, lineIndex);
-      const end = Math.max(lastClickRef.current.lineIndex, lineIndex);
-      setComposer({ hunkIndex, startIdx: start, endIdx: end, body: '' });
-      return;
-    }
-    lastClickRef.current = { hunkIndex, lineIndex };
-    setSelecting({ hunkIndex, anchorIdx: lineIndex, headIdx: lineIndex });
-  }
-
-  function saveComposer() {
-    if (!composer) return;
-    const h = file.hunks[composer.hunkIndex];
-    const startLine = h.lines[composer.startIdx];
-    const endLine = h.lines[composer.endIdx];
-    const startNo = startLine.newNo ?? startLine.oldNo ?? 0;
-    const endNo = endLine.newNo ?? endLine.oldNo ?? 0;
-    const sideFor = (t: 'context' | 'add' | 'del'): 'LEFT' | 'RIGHT' =>
-      t === 'del' ? 'LEFT' : 'RIGHT';
-    const isRange = composer.startIdx !== composer.endIdx;
-    addDraftComment({
-      uid: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      path: file.path,
-      line: endNo,
-      side: sideFor(endLine.type),
-      startLine: isRange ? startNo : undefined,
-      startSide: isRange ? sideFor(startLine.type) : undefined,
-      body: composer.body.trim()
-    });
-    setComposer(null);
-  }
-
-  function isInSelection(hunkIndex: number, lineIndex: number): boolean {
-    if (!selecting || selecting.hunkIndex !== hunkIndex) return false;
-    const lo = Math.min(selecting.anchorIdx, selecting.headIdx);
-    const hi = Math.max(selecting.anchorIdx, selecting.headIdx);
-    return lineIndex >= lo && lineIndex <= hi;
-  }
-
-  const diffFontSize = useUI((s) => s.diffFontSize);
-  const diffDensity = useUI((s) => s.diffDensity);
-  const lineHeight = diffDensity === 'comfortable' ? 1.9 : 1.45;
-
-  return (
-    <div
-      className={`font-mono ${selecting ? 'select-none cursor-row-resize' : ''}`}
-      style={{ fontSize: `${diffFontSize}px`, lineHeight }}
-    >
-      <div className="bg-canvas">
-        {items.map((it, idx) => {
-          if (it.kind === 'hunk-header') {
-            const h = file.hunks[it.hunkIndex];
-            return (
-              <div
-                key={`h-${idx}`}
-                className="flex items-center gap-2 px-2 py-0.5 text-fg-subtle bg-canvas-inset/40 border-y border-border-muted"
-              >
-                <code className="truncate">{h.header}</code>
-              </div>
-            );
-          }
-          const h = file.hunks[it.hunkIndex];
-          const line = h.lines[it.lineIndex!];
-          const globalIdx = lineGlobalIndex[it.hunkIndex][it.lineIndex!];
-          const tokenHtml = tokens?.[globalIdx];
-          const ln = line.newNo ?? line.oldNo ?? 0;
-          const lineThreads = threadsByLine.get(ln) ?? [];
-          const lineDrafts = draftsByLine.get(ln) ?? [];
-          const composerOpen =
-            composer?.hunkIndex === it.hunkIndex && composer?.endIdx === it.lineIndex;
-          const inSel = isInSelection(it.hunkIndex, it.lineIndex!);
-
-          const matchRanges =
-            lineMatchMap?.get(lineKey(file.path, it.hunkIndex, it.lineIndex!));
-          const isActiveLine =
-            activeMatch?.kind === 'line' &&
-            activeMatch.filePath === file.path &&
-            activeMatch.hunkIndex === it.hunkIndex &&
-            activeMatch.lineIndex === it.lineIndex;
-          const activeRange = isActiveLine
-            ? { start: activeMatch!.start, end: activeMatch!.end }
-            : undefined;
-
-          return (
-            <div key={`l-${idx}`}>
-              <DiffRow
-                hunkIndex={it.hunkIndex}
-                lineIndex={it.lineIndex!}
-                type={line.type}
-                oldNo={line.oldNo}
-                newNo={line.newNo}
-                content={line.content}
-                tokenHtml={tokenHtml}
-                inSelection={inSel}
-                matchRanges={matchRanges}
-                activeRange={activeRange}
-                onGutterPointerDown={onGutterPointerDown}
-              />
-              {lineThreads.map((t) => (
-                <CommentBubble
-                  key={t.id}
-                  author={t.user.login}
-                  body={t.body}
-                  date={t.createdAt}
-                />
-              ))}
-              {lineDrafts.map((d) => (
-                <CommentBubble
-                  key={d.uid}
-                  author="(draft)"
-                  body={d.body}
-                  rangeLabel={draftRangeLabel(d)}
-                  onRemove={() => removeDraftComment(d.uid)}
-                />
-              ))}
-              {composerOpen && (
-                <Composer
-                  rangeLabel={composerRangeLabel(file.hunks[composer!.hunkIndex], composer!)}
-                  value={composer!.body}
-                  onChange={(v) => setComposer((c) => (c ? { ...c, body: v } : c))}
-                  onCancel={() => setComposer(null)}
-                  onSave={saveComposer}
-                />
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function composerRangeLabel(h: DiffHunk, c: ComposerState): string {
-  const startLine = h.lines[c.startIdx];
-  const endLine = h.lines[c.endIdx];
-  const startNo = startLine.newNo ?? startLine.oldNo ?? 0;
-  const endNo = endLine.newNo ?? endLine.oldNo ?? 0;
-  if (c.startIdx === c.endIdx) return `line ${endNo}`;
-  return `lines ${startNo}–${endNo}`;
-}
-
-function draftRangeLabel(d: DraftInlineComment): string | undefined {
-  if (d.startLine != null && d.startLine !== d.line) {
-    return `lines ${d.startLine}–${d.line}`;
-  }
-  return undefined;
-}
-
-const DiffRow = memo(function DiffRow({
-  hunkIndex,
-  lineIndex,
-  type,
-  oldNo,
-  newNo,
-  content,
-  tokenHtml,
-  inSelection,
-  matchRanges,
-  activeRange,
-  onGutterPointerDown
-}: {
-  hunkIndex: number;
-  lineIndex: number;
-  type: 'context' | 'add' | 'del';
-  oldNo: number | null;
-  newNo: number | null;
-  content: string;
-  tokenHtml: string | undefined;
-  inSelection: boolean;
-  matchRanges?: Array<{ start: number; end: number }>;
-  activeRange?: { start: number; end: number };
-  onGutterPointerDown: (
-    e: React.PointerEvent<HTMLElement>,
-    hunkIndex: number,
-    lineIndex: number
-  ) => void;
-}) {
-  const bg = type === 'add' ? 'bg-diff-addBg' : type === 'del' ? 'bg-diff-delBg' : '';
-  const sign = type === 'add' ? '+' : type === 'del' ? '−' : ' ';
-  const signColor =
-    type === 'add' ? 'text-success' : type === 'del' ? 'text-danger' : 'text-fg-subtle';
-
-  const selOverlay = inSelection
-    ? 'shadow-[inset_2px_0_0_theme(colors.accent.DEFAULT)] bg-accent-subtle/60'
-    : '';
-
-  const hasMatches = matchRanges && matchRanges.length > 0;
-  // When the line has search matches, give up shiki highlighting on that line
-  // so we can wrap the matched substrings cleanly. Most users won't care:
-  // the active line is usually scrolled into view.
-  const rendered = hasMatches ? (
-    <HighlightedContent content={content} ranges={matchRanges} activeRange={activeRange} />
-  ) : tokenHtml ? (
-    <code
-      className="flex-1 whitespace-pre pr-3 text-fg"
-      dangerouslySetInnerHTML={{ __html: tokenHtml }}
-    />
-  ) : (
-    <code className="flex-1 whitespace-pre pr-3 text-fg">{content || ' '}</code>
-  );
-
-  return (
-    <div
-      data-hunk={hunkIndex}
-      data-line={lineIndex}
-      className={`group flex items-stretch ${bg} ${selOverlay} hover:bg-canvas-overlay/40`}
-    >
-      <Gutter num={oldNo} variant="old" />
-      <Gutter num={newNo} variant="new" />
-      <button
-        onPointerDown={(e) => onGutterPointerDown(e, hunkIndex, lineIndex)}
-        className={`w-4 shrink-0 transition-opacity ${
-          inSelection
-            ? 'opacity-100 text-accent'
-            : 'text-fg-subtle opacity-0 group-hover:opacity-100 hover:text-accent'
-        }`}
-        title="Click to comment; drag to select a range; shift-click to extend"
-        tabIndex={-1}
-      >
-        +
-      </button>
-      <span className={`w-3 shrink-0 ${signColor}`}>{sign}</span>
-      {rendered}
-    </div>
-  );
-});
-
-function HighlightedContent({
-  content,
-  ranges,
-  activeRange
-}: {
-  content: string;
-  ranges: Array<{ start: number; end: number }> | undefined;
-  activeRange?: { start: number; end: number };
-}) {
-  if (!ranges || ranges.length === 0) {
-    return <code className="flex-1 whitespace-pre pr-3 text-fg">{content || ' '}</code>;
-  }
-  const parts: React.ReactNode[] = [];
-  let cursor = 0;
-  ranges.forEach((r, i) => {
-    if (r.start > cursor) {
-      parts.push(content.slice(cursor, r.start));
-    }
-    const isActive =
-      activeRange && activeRange.start === r.start && activeRange.end === r.end;
-    parts.push(
-      <mark
-        key={i}
-        className={
-          isActive
-            ? 'bg-attention text-canvas-inset rounded-sm px-px ring-1 ring-attention-emphasis'
-            : 'bg-attention-subtle text-fg rounded-sm px-px'
-        }
-      >
-        {content.slice(r.start, r.end)}
-      </mark>
-    );
-    cursor = r.end;
-  });
-  if (cursor < content.length) {
-    parts.push(content.slice(cursor));
-  }
-  return (
-    <code className="flex-1 whitespace-pre pr-3 text-fg">
-      {parts}
-    </code>
-  );
-}
-
-function Gutter({
-  num,
-  variant
-}: {
-  num: number | null;
-  variant: 'old' | 'new';
-}) {
-  return (
-    <span
-      className={`w-10 shrink-0 text-right pr-2 text-fg-subtle bg-canvas-inset/40 border-r border-border-muted ${
-        variant === 'old' ? 'border-l border-l-transparent' : ''
-      }`}
-    >
-      {num ?? ''}
-    </span>
-  );
-}
-
 function CommentBubble({
   author,
   body,
@@ -840,7 +720,7 @@ function CommentBubble({
   onRemove?: () => void;
 }) {
   return (
-    <div className="ml-24 my-1 rounded-md border border-border-muted bg-canvas-overlay px-3 py-2 max-w-2xl">
+    <div className="my-1 rounded-md border border-border-muted bg-canvas-overlay px-3 py-2 max-w-2xl font-sans">
       <div className="flex items-center justify-between mb-1 text-2xs text-fg-subtle">
         <span>
           <span className="text-fg">@{author}</span>
@@ -858,37 +738,39 @@ function CommentBubble({
   );
 }
 
+/**
+ * Inline comment composer rendered as a line annotation. Owns its textarea
+ * state so typing doesn't force the diff (and its annotation list) to
+ * re-render on every keystroke.
+ */
 function Composer({
   rangeLabel,
-  value,
-  onChange,
   onCancel,
   onSave
 }: {
   rangeLabel: string;
-  value: string;
-  onChange: (v: string) => void;
   onCancel: () => void;
-  onSave: () => void;
+  onSave: (body: string) => void;
 }) {
+  const [body, setBody] = useState('');
   const ref = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     ref.current?.focus();
   }, []);
   return (
-    <div className="ml-24 my-1 rounded-md border border-accent/40 bg-canvas-overlay px-3 py-2 max-w-2xl animate-slide-up">
+    <div className="my-1 rounded-md border border-accent/40 bg-canvas-overlay px-3 py-2 max-w-2xl animate-slide-up font-sans">
       <div className="text-2xs text-accent mb-1">Comment on {rangeLabel}</div>
       <textarea
         ref={ref}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
+        value={body}
+        onChange={(e) => setBody(e.target.value)}
         rows={3}
         placeholder="Leave a comment…"
         className="w-full bg-canvas-inset border border-border-muted rounded-md p-2 text-xs text-fg outline-none focus:border-accent resize-y"
         onKeyDown={(e) => {
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
             e.preventDefault();
-            if (value.trim()) onSave();
+            if (body.trim()) onSave(body);
           }
           if (e.key === 'Escape') onCancel();
         }}
@@ -901,8 +783,8 @@ function Composer({
           </button>
           <button
             className="btn-primary disabled:opacity-50"
-            disabled={!value.trim()}
-            onClick={onSave}
+            disabled={!body.trim()}
+            onClick={() => onSave(body)}
           >
             Add to review
           </button>

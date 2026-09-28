@@ -23,6 +23,7 @@ export class ClickUpClientError extends Error implements GhError {
 
 async function call<T>(token: string, path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
+    signal: AbortSignal.timeout(30_000),
     ...init,
     headers: {
       Authorization: token,
@@ -179,3 +180,4 @@ export async function whoami(token: string): Promise<ClickUpAuthResult> {
   );
   return { ok: true, user: res.user };
 }
+

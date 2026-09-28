@@ -190,6 +190,15 @@ export interface ReviewDraft {
 
 export type MergeStrategy = 'merge' | 'squash' | 'rebase';
 
+export interface MergeOptions {
+  /** `gh pr merge --admin`: bypass branch protection with admin privileges. */
+  admin?: boolean;
+  /** `gh pr merge --auto`: enable auto-merge once requirements are met. */
+  auto?: boolean;
+  /** Delete the head branch after merging. */
+  deleteBranch?: boolean;
+}
+
 export interface CreatePRInput {
   base: string;
   head: string;
@@ -238,11 +247,15 @@ export interface GhError {
     | 'NOT_A_GITHUB_REMOTE'
     | 'NOT_FOUND'
     | 'TIMEOUT'
+    | 'RATE_LIMITED'
     | 'UNKNOWN'
     | 'AI_NOT_AUTHENTICATED'
+    | 'AI_CANCELLED'
     | 'AI_FAILED'
     | 'AI_WORKING_TREE_DIRTY'
     | 'AI_WRONG_BRANCH'
+    | 'WORKSPACE_DIRTY'
+    | 'WORKSPACE_FAILED'
     | 'GIT_PUSH_FAILED'
     | 'CLICKUP_NOT_CONFIGURED'
     | 'CLICKUP_UNAUTHORIZED'
@@ -258,6 +271,18 @@ export interface GhError {
     | 'VERCEL_FAILED';
   message: string;
   stderr?: string;
+  /** Set for RATE_LIMITED: how long the client should wait before retrying. */
+  retryAfterMs?: number;
+}
+
+/** A top-level (non-inline) comment on the PR's conversation timeline. */
+export interface PRIssueComment {
+  id: number;
+  user: PRAuthor;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  url: string;
 }
 
 export interface ClickUpStatus {
@@ -382,6 +407,44 @@ export interface JenkinsAuthResult {
   user?: string;
 }
 
+/** Result of checking the saved Jenkins credentials. Never throws. */
+export type JenkinsStatus =
+  | { state: 'unconfigured' }
+  | { state: 'ok'; user: string; baseUrl: string; username: string }
+  | { state: 'error'; code: string; message: string; baseUrl: string | null; username: string | null };
+
+/** A multibranch pipeline discovered on the Jenkins server. */
+export interface JenkinsJob {
+  /** Path under the base URL, as Jenkins encodes it, e.g. `job/Folder/job/My%20App`. */
+  jobPath: string;
+  displayName: string;
+  /** Parent folder names, if the job lives in a folder. */
+  folder: string | null;
+  url: string;
+}
+
+/** Builds of one pipeline's job for a PR's branch (or its `PR-<n>` job). */
+export interface JenkinsPipelineBuilds {
+  jobPath: string;
+  label: string;
+  /** URL of the branch/PR job inside the multibranch pipeline. */
+  branchJobUrl: string;
+  branchJobName: string;
+  kind: 'branch' | 'pr';
+  inQueue: boolean;
+  builds: JenkinsBuild[];
+}
+
+export interface JenkinsPRBuilds {
+  pipelines: JenkinsPipelineBuilds[];
+  /** Linked pipelines for the repo. */
+  linked: number;
+  /** Linked job paths that no longer exist on the server. */
+  missing: string[];
+  /** Pipelines that failed to load (network, permissions). */
+  errors: { jobPath: string; message: string }[];
+}
+
 export type JenkinsBuildResult =
   | 'SUCCESS'
   | 'FAILURE'
@@ -435,24 +498,18 @@ export interface JenkinsTestSummary {
 // Vercel integration
 // ---------------------------------------------------------------------------
 
-export interface VercelProjectConfig {
-  /** Stable id for React keys; generated client-side. */
-  id: string;
-  /** Display label, e.g. "Marketing site". */
-  label: string;
-  /** Vercel project id (prj_…). */
-  projectId: string;
-}
-
-export interface VercelRepoConfig {
-  projects: VercelProjectConfig[];
-}
-
 export interface VercelConfig {
   token: string | null;
-  /** Optional team id (team_… or vercel team slug). Personal accounts leave blank. */
+  /** Team id (team_…). Personal accounts leave blank. */
   teamId: string | null;
-  repos: Record<string, VercelRepoConfig>;
+  /** Project ids not shown on PRs. Projects are matched to repos by their Git link. */
+  hiddenProjects: string[];
+}
+
+export interface VercelTeam {
+  id: string;
+  slug: string;
+  name: string;
 }
 
 export interface VercelAuthResult {
@@ -490,56 +547,167 @@ export interface VercelProjectLookup {
   id: string;
   name: string;
   framework: string | null;
+  /** `owner/name` of the linked Git repository, if any. */
+  repo: string | null;
+  rootDirectory: string | null;
 }
+
+/** One Vercel project's deployments of a PR's branch. */
+export interface VercelProjectDeployments {
+  projectId: string;
+  projectName: string;
+  /** Newest deployment of the PR head commit, else newest of the branch. */
+  latest: VercelDeployment;
+  /** Whether `latest` is for the PR's head commit. */
+  atHead: boolean;
+  history: VercelDeployment[];
+}
+
+export interface VercelPRDeployments {
+  projects: VercelProjectDeployments[];
+  hidden: number;
+}
+
+/** Which backend powers the AI review / chat panel. */
+export type AIProvider = 'claude' | 'codex';
 
 /** Source of credentials the AI client can use. */
-export type AIAuthSource = 'claude-code' | 'api-key' | 'none';
+export type AIAuthSource =
+  | 'claude-code'
+  | 'api-key'
+  | 'codex-chatgpt'
+  | 'codex-api-key'
+  | 'none';
 
 export interface AIAuthStatus {
+  provider: AIProvider;
   available: boolean;
   source: AIAuthSource;
+  /** Human-readable detail (e.g. model in use, or why auth is unavailable). */
+  detail?: string;
 }
 
-export type AIReviewMode = 'critique' | 'summary' | 'recap' | 'risk' | 'tests';
+export type AILanguage = 'en' | 'tr';
 
-export interface AIReviewOptions {
-  mode: AIReviewMode;
-  includeClickUpTask?: boolean;
+export type AIReviewDepth = 'quick' | 'thorough';
+
+export interface AIConfig {
+  /** Default provider for new reviews; each review can override it. */
+  provider: AIProvider;
+  /** Codex model id; null = whatever ~/.codex/config.toml selects. */
+  codexModel: string | null;
+  /** Codex reasoning effort override; null = picked from the review depth. */
+  codexReasoningEffort: string | null;
+  /** Claude model used for thorough reviews and chat. */
+  claudeModel: string;
+  /** Default review depth. */
+  depth: AIReviewDepth;
+  /** Start a review automatically when a PR without a current review is opened. */
+  autoReview: boolean;
+  /** Language the reviewer writes its verdict and comments in. */
+  language: AILanguage;
+  /** Custom review directive (persona + checklist); null = built-in default. */
+  directive: string | null;
 }
 
-export interface AIReviewResult {
-  summary: string;
-  mode: AIReviewMode;
-  /** Reported by SDK; may be 0 when using subscription auth. */
-  costUSD?: number;
-  durationMs?: number;
+export interface AICodexModel {
+  id: string;
+  displayName: string;
+  description: string;
+  isDefault: boolean;
+  reasoningEfforts: string[];
+  defaultReasoningEffort: string;
 }
 
-export interface AIReviewChunk {
-  prNumber: number;
-  /** Identifies which streaming exchange this chunk belongs to. */
-  streamId: string;
-  /** Incremental text appended since the last chunk. */
-  text: string;
+export interface AIClaudeModel {
+  id: string;
+  label: string;
+  description: string;
 }
+
+export type AIFindingSeverity = 'critical' | 'high' | 'medium' | 'low';
+
+export interface AIReviewFinding {
+  /** Stable across re-runs: hash of path, anchored line text and title. */
+  id: string;
+  path: string;
+  /** End line of the finding (new side unless side === 'LEFT'); null when unanchored. */
+  line: number | null;
+  /** Set for multi-line findings. */
+  startLine?: number;
+  side: 'LEFT' | 'RIGHT';
+  severity: AIFindingSeverity;
+  /** One-line headline. */
+  title: string;
+  /** Problem → impact → fix, ready to post as an inline comment. */
+  body: string;
+  /** Exact replacement for lines startLine..line, when the fix is small. */
+  suggestion?: string | null;
+  /**
+   * Whether path/line resolve to a line in the diff. Unanchored findings are
+   * still shown but can only be added as file-level comments.
+   */
+  anchored: boolean;
+}
+
+export type AISessionStatus = 'running' | 'done' | 'error' | 'cancelled';
 
 export interface AIChatMessage {
   role: 'user' | 'assistant';
   content: string;
+  /** Finding the question was about, when asked from a finding. */
+  findingId?: string;
 }
 
-export interface AIChatRequest {
-  history: AIChatMessage[];
-  message: string;
-  includeClickUpTask?: boolean;
-  /** Echoed back on stream chunks so the renderer can route them. */
-  streamId: string;
-}
-
-export interface AIChatResult {
-  reply: string;
+/**
+ * One AI review of a PR, owned by the main process. It survives panel
+ * collapse and PR switches, and is persisted per PR (latest review only).
+ */
+export interface AISession {
+  repoId: string;
+  prNumber: number;
+  /** Head commit the review looked at. */
+  headOid: string;
+  provider: AIProvider;
+  model: string | null;
+  depth: AIReviewDepth;
+  status: AISessionStatus;
+  startedAt: number;
+  finishedAt: number | null;
+  /** Recent progress lines (tool calls, file reads). */
+  progress: string[];
+  /** Verdict, 1-3 sentences. Empty until the model writes it. */
+  verdict: string;
+  findings: AIReviewFinding[];
+  notes: string[];
+  /** Finding ids the user dismissed. Survive re-runs because ids are stable. */
+  dismissed: string[];
+  /** Raw model output when it couldn't be parsed. */
+  raw?: string;
+  error?: GhError | null;
   costUSD?: number;
   durationMs?: number;
+  /** True when the model ran in a checkout of the PR head. */
+  usedWorktree: boolean;
+  chat: AIChatMessage[];
+  /** In-flight chat reply, streamed. */
+  chatStream: { message: string; text: string; status: string | null; findingId?: string } | null;
+  /** Provider conversation handle (Codex thread id) for follow-up chat. */
+  threadId?: string | null;
+}
+
+/** Lightweight per-PR summary for list badges. */
+export interface AISessionSummary {
+  repoId: string;
+  prNumber: number;
+  headOid: string;
+  status: AISessionStatus;
+  findings: number;
+}
+
+export interface AIReviewStartOptions {
+  provider?: AIProvider;
+  depth?: AIReviewDepth;
 }
 
 export interface AIApplyPreflight {
@@ -552,6 +720,11 @@ export type AIApplyProgress =
   | { kind: 'tool'; name: string; path?: string }
   | { kind: 'text'; text: string };
 
+export interface AIApplyProgressEvent {
+  streamId: string;
+  event: AIApplyProgress;
+}
+
 export interface AIApplyResult {
   diff: FileDiff[];
   commitMessage: string;
@@ -560,7 +733,7 @@ export interface AIApplyResult {
   untrackedBefore: string[];
 }
 
-export type SystemToolId = 'gh' | 'claude';
+export type SystemToolId = 'gh' | 'claude' | 'codex';
 
 export interface SystemTool {
   id: SystemToolId;
@@ -571,4 +744,33 @@ export interface SystemTool {
   version?: string;
   installUrl: string;
   installCommand: string;
+}
+
+/** A user-facing git worktree checked out for one PR (see main/git/workspaces.ts). */
+export interface PRWorkspace {
+  repoId: string;
+  prNumber: number;
+  path: string;
+  /** Local branch checked out in the worktree. */
+  branch: string;
+  /** True when we created the branch (so cleanup may delete it). */
+  createdBranch: boolean;
+  createdAt: number;
+}
+
+/** Workspace plus live git state, for the cleanup list. */
+export interface PRWorkspaceStatus extends PRWorkspace {
+  exists: boolean;
+  /** Uncommitted changes (tracked + untracked). */
+  dirty: number;
+  /** Commits not on the upstream branch; null when there is no upstream. */
+  unpushed: number | null;
+  /** PR state from GitHub when known. */
+  prState: 'OPEN' | 'MERGED' | 'CLOSED' | null;
+  prTitle: string | null;
+}
+
+export interface ReviewCacheInfo {
+  count: number;
+  inUse: number;
 }

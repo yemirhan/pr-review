@@ -1,4 +1,5 @@
 import { gh } from './client';
+import { invalidatePR } from './prs';
 import type { ReviewDraft, DraftInlineComment, DraftFileComment } from '@shared/types';
 
 /**
@@ -15,36 +16,52 @@ export async function submitReview(
   num: number,
   draft: ReviewDraft
 ): Promise<void> {
-  // Phase 1: the review itself.
-  const payload = {
-    event: draft.event,
-    body: draft.body ?? '',
-    comments: draft.comments.map((c) => mapDraftComment(c))
-  };
+  const fileComments = draft.fileComments ?? [];
+  const body = (draft.body ?? '').trim();
 
-  await gh(
-    [
-      'api',
-      '--method',
-      'POST',
-      `repos/${owner}/${name}/pulls/${num}/reviews`,
-      '--input',
-      '-',
-      '-H',
-      'Accept: application/vnd.github+json'
-    ],
-    { input: JSON.stringify(payload) }
-  );
+  // A COMMENT review with neither a body nor inline comments is rejected by
+  // GitHub (422). That happens when the user only left file-level comments,
+  // which are posted separately in phase 2 — so skip phase 1 in that case.
+  const reviewIsEmpty = draft.event === 'COMMENT' && !body && draft.comments.length === 0;
+  if (reviewIsEmpty && fileComments.length === 0) {
+    throw new Error('Nothing to submit: add a comment or a review body first.');
+  }
+
+  // Phase 1: the review itself.
+  if (!reviewIsEmpty) {
+    const payload = {
+      event: draft.event,
+      body,
+      comments: draft.comments.map((c) => mapDraftComment(c))
+    };
+
+    await gh(
+      [
+        'api',
+        '--method',
+        'POST',
+        `repos/${owner}/${name}/pulls/${num}/reviews`,
+        '--input',
+        '-',
+        '-H',
+        'Accept: application/vnd.github+json'
+      ],
+      { input: JSON.stringify(payload) }
+    );
+  }
 
   // Phase 2: file-level comments, one per request. Posting them after the review
   // means an early failure in phase 1 cancels the whole submission.
-  const fileComments = draft.fileComments ?? [];
-  if (fileComments.length === 0) return;
-  if (!draft.headOid) {
-    throw new Error('submitReview: headOid is required when fileComments are present');
-  }
-  for (const fc of fileComments) {
-    await postFileComment(owner, name, num, draft.headOid, fc);
+  try {
+    if (fileComments.length === 0) return;
+    if (!draft.headOid) {
+      throw new Error('submitReview: headOid is required when fileComments are present');
+    }
+    for (const fc of fileComments) {
+      await postFileComment(owner, name, num, draft.headOid, fc);
+    }
+  } finally {
+    invalidatePR(owner, name, num);
   }
 }
 

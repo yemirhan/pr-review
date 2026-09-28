@@ -15,7 +15,7 @@ export function Skeleton({
     <div
       style={style}
       className={cn(
-        'relative overflow-hidden rounded bg-fg/[0.06] dark:bg-fg/[0.08] skeleton-shimmer',
+        'relative overflow-hidden rounded bg-fg/[0.06] skeleton-shimmer',
         className
       )}
       aria-hidden

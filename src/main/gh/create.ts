@@ -1,4 +1,5 @@
 import { gh, ghJson } from './client';
+import { invalidateRepo } from './prs';
 import type { CreatePRInput } from '@shared/types';
 
 export interface RepoMeta {
@@ -57,5 +58,6 @@ export async function createPR(
     .pop();
   const m = url?.match(/\/pull\/(\d+)/);
   if (!m) throw new Error(`Could not parse PR number from gh output: ${out}`);
+  invalidateRepo(owner, name);
   return Number(m[1]);
 }

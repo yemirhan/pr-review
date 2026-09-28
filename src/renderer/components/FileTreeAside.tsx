@@ -1,9 +1,10 @@
-import { useState, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import {
   useUI,
   FILE_TREE_WIDTH_MIN,
   FILE_TREE_WIDTH_MAX
 } from '../store/ui';
+import { usePanelResize } from '../lib/panelResize';
 
 interface Props {
   children: ReactNode;
@@ -19,7 +20,13 @@ export function FileTreeAside({ children }: Props) {
   const setWidth = useUI((s) => s.setFileTreeWidth);
   const collapsed = useUI((s) => s.fileTreeCollapsed);
   const toggle = useUI((s) => s.toggleFileTree);
-  const [dragging, setDragging] = useState(false);
+  const { panelRef, dragging, startResize } = usePanelResize<HTMLElement>({
+    width,
+    min: FILE_TREE_WIDTH_MIN,
+    max: FILE_TREE_WIDTH_MAX,
+    direction: 1,
+    onCommit: setWidth
+  });
 
   if (collapsed) {
     return (
@@ -36,25 +43,9 @@ export function FileTreeAside({ children }: Props) {
     );
   }
 
-  function startResize(e: React.PointerEvent<HTMLDivElement>) {
-    e.preventDefault();
-    const startX = e.clientX;
-    const startW = width;
-    setDragging(true);
-    function onMove(ev: PointerEvent) {
-      setWidth(startW + (ev.clientX - startX));
-    }
-    function onUp() {
-      setDragging(false);
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-    }
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-  }
-
   return (
     <aside
+      ref={panelRef}
       className="relative shrink-0 border-r border-border-muted bg-canvas-subtle/30 flex flex-col min-h-0"
       style={{ width: `${width}px` }}
     >
